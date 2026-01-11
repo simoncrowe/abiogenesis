@@ -316,7 +316,7 @@ async function main() {
 
   const cam = new FlyCamera();
 
-  let viewRadius = 0.35;
+  let viewRadius = 0.5;
   let volumeThreshold = 0.25;
   let gradMagGain = 25.0;
   const meshColor = [0.15, 0.65, 0.9, 0.75];
@@ -370,7 +370,7 @@ async function main() {
     );
   }
 
-  const dims = 192;
+  const dims = 128;
 
   const simStrategies = {
     gray_scott: {
@@ -556,7 +556,7 @@ async function main() {
       periodMs,
       simConfig,
     });
-    meshWorker.postMessage({ type: "init", ctrl, vSabs, chunkMinSabs, chunkMaxSabs, timing });
+    meshWorker.postMessage({ type: "init", ctrl, vSabs, chunkMinSabs, chunkMaxSabs, timing, dims });
 
     simWorker.onmessage = (e) => {
       const msg = e.data;
