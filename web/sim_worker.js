@@ -31,7 +31,14 @@ let simConfig = {
   params: { du: 0.16, dv: 0.08, feed: 0.037, kill: 0.06 },
   dt: 0.1,
   ticksPerSecond: 5,
-  seeding: { type: "classic", noiseAmp: 0.01, cubeCount: 20, cubeSize01: 0.05, u: 0.5, v: 0.25 },
+  seeding: {
+    type: "classic",
+    noiseAmp: 0.01,
+    sphereCount: 20,
+    sphereRadius01: 0.05,
+    u: 0.5,
+    v: 0.25,
+  },
 };
 
 let stepTimer = null;
@@ -150,7 +157,14 @@ function seedClassic(
   sim,
   dims,
   seed,
-  { noiseAmp = 0.01, cubeCount = 20, cubeSize01 = 0.05, u = 0.5, v = 1.0 } = {},
+  {
+    noiseAmp = 0.01,
+    sphereCount = 20,
+    sphereRadius01 = 0.05,
+    sphereRadiusJitter01 = 0.4,
+    u = 0.5,
+    v = 0.25,
+  } = {},
 ) {
   const vPtr = sim.v_ptr();
   const vLen = sim.v_len();
@@ -177,25 +191,45 @@ function seedClassic(
     }
   }
 
-  // Random cube perturbations.
-  const cubeSize = Math.max(1, Math.floor(dims * Math.max(0, Math.min(1, cubeSize01))));
+  // Random sphere perturbations (with radius variation).
+  const baseRadius = Math.max(1, Math.floor(dims * Math.max(0, Math.min(1, sphereRadius01))));
+  const jitter = Math.max(0, Math.min(1, Number(sphereRadiusJitter01) || 0));
+
   const uu = clamp01(Number(u) || 0);
   const vv = clamp01(Number(v) || 0);
-  const count = Math.max(0, Math.min(1000, Math.trunc(cubeCount)));
+  const count = Math.max(0, Math.min(1000, Math.trunc(sphereCount)));
 
   for (let n = 0; n < count; n++) {
-    const x0 = Math.floor(rng.nextFloat() * (dims - cubeSize));
-    const y0 = Math.floor(rng.nextFloat() * (dims - cubeSize));
-    const z0 = Math.floor(rng.nextFloat() * (dims - cubeSize));
+    const scale = 1 - jitter + rng.nextFloat() * (2 * jitter);
+    const radius = Math.max(1, Math.round(baseRadius * scale));
+    const r2 = radius * radius;
 
-    const x1 = x0 + cubeSize;
-    const y1 = y0 + cubeSize;
-    const z1 = z0 + cubeSize;
+    const minC = radius;
+    const maxC = dims - 1 - radius;
 
-    for (let z = z0; z < z1; z++) {
-      for (let y = y0; y < y1; y++) {
+    // Keep the entire sphere inside the volume (no boundary intersections).
+    // If the radius is too large for the grid, fall back to a centered sphere.
+    const cx = maxC >= minC ? minC + Math.floor(rng.nextFloat() * (maxC - minC + 1)) : Math.floor(dims / 2);
+    const cy = maxC >= minC ? minC + Math.floor(rng.nextFloat() * (maxC - minC + 1)) : Math.floor(dims / 2);
+    const cz = maxC >= minC ? minC + Math.floor(rng.nextFloat() * (maxC - minC + 1)) : Math.floor(dims / 2);
+
+    const x0 = cx - radius;
+    const x1 = cx + radius;
+    const y0 = cy - radius;
+    const y1 = cy + radius;
+    const z0 = cz - radius;
+    const z1 = cz + radius;
+
+    for (let z = z0; z <= z1; z++) {
+      const dz = z - cz;
+      const dz2 = dz * dz;
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - cy;
+        const dy2 = dy * dy;
         const base = dims * (y + dims * z);
-        for (let x = x0; x < x1; x++) {
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - cx;
+          if (dx * dx + dy2 + dz2 > r2) continue;
           const i = base + x;
           if (uView) uView[i] = uu;
           vView[i] = vv;

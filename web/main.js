@@ -319,7 +319,7 @@ async function main() {
   let viewRadius = 0.35;
   let volumeThreshold = 0.25;
   let gradMagGain = 25.0;
-  const meshColor = [0.15, 0.65, 0.9, 0.9];
+  const meshColor = [0.15, 0.65, 0.9, 0.75];
 
   const fogColor = [0.04, 0.06, 0.08];
   const fogDensity = 12.0;
@@ -434,19 +434,20 @@ async function main() {
           min: 1,
           max: 30,
           step: 1,
-          defaultValue: 5,
+          defaultValue: 10,
           requiresRestart: false,
         },
       ],
       seedings: [
         {
           id: "classic",
-          name: "Random cubes + noise (long-lived)",
+          name: "Random spheres + noise (long-lived)",
           config: {
             type: "classic",
             noiseAmp: 0.01,
-            cubeCount: 20,
-            cubeSize01: 0.05,
+            sphereCount: 20,
+            sphereRadius01: 0.05,
+            sphereRadiusJitter01: 0.4,
             u: 0.5,
             v: 0.25,
           },
@@ -870,7 +871,10 @@ async function main() {
 
     gl.bindVertexArray(gpuMesh.vao);
     if (gpuMesh.indexCount > 0) {
+      // Disable depth writes so inner surfaces can blend through.
+      //gl.depthMask(false);
       gl.drawElements(gl.TRIANGLES, gpuMesh.indexCount, gl.UNSIGNED_INT, 0);
+      gl.depthMask(true);
     }
     gl.bindVertexArray(null);
 
