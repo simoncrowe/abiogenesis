@@ -1,3 +1,8 @@
+{
+  # Keep local HTTPS, but don't bind to :80 for HTTP->HTTPS redirects.
+  auto_https disable_redirects
+}
+
 https://localhost:8080 {
   # Serve the repo root so `/web/` and `/wasm/` both work.
   root * .
