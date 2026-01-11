@@ -316,13 +316,13 @@ async function main() {
 
   const cam = new FlyCamera();
 
-  let viewRadius = 0.35;
+  let viewRadius = 1;
   let volumeThreshold = 0.25;
-  let gradMagGain = 25.0;
+  let gradMagGain = 12.0;
   const meshColor = [0.15, 0.65, 0.9, 0.75];
 
-  const fogColor = [0.04, 0.06, 0.08];
-  const fogDensity = 12.0;
+  const fogColor = [0.04, 0.06, 0.14];
+  const fogDensity = 8.0;
 
   const gpuMesh = createMeshGpu(gl);
 
@@ -370,7 +370,7 @@ async function main() {
     );
   }
 
-  const dims = 192;
+  const dims = 128;
 
   const simStrategies = {
     gray_scott: {
@@ -430,11 +430,11 @@ async function main() {
         {
           key: "ticksPerSecond",
           path: ["ticksPerSecond"],
-          label: "Simulation ticks per second",
+          label: "Snapshot ticks per second",
           min: 1,
-          max: 30,
+          max: 60,
           step: 1,
-          defaultValue: 10,
+          defaultValue: 30,
           requiresRestart: false,
         },
       ],
@@ -534,7 +534,7 @@ async function main() {
     // timingI64[0] = last publish Date.now() (ms)
     // timingI64[1] = target period (ms)
     const timing = new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT * 2);
-    const ticksPerSecond = Math.max(1, Math.min(30, Math.trunc(simConfig.ticksPerSecond ?? 5)));
+    const ticksPerSecond = Math.max(1, Math.min(60, Math.trunc(simConfig.ticksPerSecond ?? 5)));
     const periodMs = Math.max(1, Math.round(1000 / ticksPerSecond));
 
     const timingI64 = new BigInt64Array(timing);
@@ -556,7 +556,7 @@ async function main() {
       periodMs,
       simConfig,
     });
-    meshWorker.postMessage({ type: "init", ctrl, vSabs, chunkMinSabs, chunkMaxSabs, timing });
+    meshWorker.postMessage({ type: "init", ctrl, vSabs, chunkMinSabs, chunkMaxSabs, timing, dims });
 
     simWorker.onmessage = (e) => {
       const msg = e.data;

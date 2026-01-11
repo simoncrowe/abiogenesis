@@ -184,6 +184,16 @@ pub struct Simulation {
     nx: usize,
     ny: usize,
     nz: usize,
+    nxy: usize,
+
+    // Precomputed wrapped neighbor indices, to avoid per-voxel `wrap()` in hot loops.
+    x_minus: Vec<usize>,
+    x_plus: Vec<usize>,
+    y_minus: Vec<usize>,
+    y_plus: Vec<usize>,
+    z_minus: Vec<usize>,
+    z_plus: Vec<usize>,
+
     params: GrayScottParams,
     base_seed: u32,
     dt: f32,
@@ -194,6 +204,9 @@ pub struct Simulation {
     chunk_v_min: Vec<f32>,
     chunk_v_max: Vec<f32>,
 
+    // Chunk min/max are used for iso culling in meshing.
+    // For performance, we recompute them on-demand (e.g. when publishing a snapshot),
+    // not every simulation step.
     u: Vec<f32>,
     v: Vec<f32>,
     u2: Vec<f32>,
@@ -209,6 +222,14 @@ impl Simulation {
     #[wasm_bindgen(constructor)]
     pub fn new(nx: usize, ny: usize, nz: usize, seed: u32, params: GrayScottParams) -> Self {
         let n = nx * ny * nz;
+        let nxy = nx * ny;
+
+        let x_minus: Vec<usize> = (0..nx).map(|x| wrap(x as isize - 1, nx)).collect();
+        let x_plus: Vec<usize> = (0..nx).map(|x| wrap(x as isize + 1, nx)).collect();
+        let y_minus: Vec<usize> = (0..ny).map(|y| wrap(y as isize - 1, ny)).collect();
+        let y_plus: Vec<usize> = (0..ny).map(|y| wrap(y as isize + 1, ny)).collect();
+        let z_minus: Vec<usize> = (0..nz).map(|z| wrap(z as isize - 1, nz)).collect();
+        let z_plus: Vec<usize> = (0..nz).map(|z| wrap(z as isize + 1, nz)).collect();
 
         let cubes_x = nx.saturating_sub(1);
         let cubes_y = ny.saturating_sub(1);
@@ -223,6 +244,15 @@ impl Simulation {
             nx,
             ny,
             nz,
+            nxy,
+
+            x_minus,
+            x_plus,
+            y_minus,
+            y_plus,
+            z_minus,
+            z_plus,
+
             params,
             base_seed: seed,
             dt: 0.25,
@@ -405,7 +435,7 @@ impl Simulation {
         }
     }
 
-    fn recompute_chunk_ranges_from_v(&mut self) {
+    pub fn recompute_chunk_ranges_from_v(&mut self) {
         let cubes_x = self.nx.saturating_sub(1);
         let cubes_y = self.ny.saturating_sub(1);
         let cubes_z = self.nz.saturating_sub(1);
@@ -460,55 +490,66 @@ impl Simulation {
         let f = self.params.feed;
         let k = self.params.kill;
 
+        let nx = self.nx;
+        let nxy = self.nxy;
+
+        let x_minus = &self.x_minus;
+        let x_plus = &self.x_plus;
+        let y_minus = &self.y_minus;
+        let y_plus = &self.y_plus;
+        let z_minus = &self.z_minus;
+        let z_plus = &self.z_plus;
+
+        let u = &self.u;
+        let v = &self.v;
+        let u2 = &mut self.u2;
+        let v2 = &mut self.v2;
+
         for z in 0..self.nz {
-            let zm = wrap(z as isize - 1, self.nz);
-            let zp = wrap(z as isize + 1, self.nz);
+            let z_off = z * nxy;
+            let z_off_m = z_minus[z] * nxy;
+            let z_off_p = z_plus[z] * nxy;
+
             for y in 0..self.ny {
-                let ym = wrap(y as isize - 1, self.ny);
-                let yp = wrap(y as isize + 1, self.ny);
-                for x in 0..self.nx {
-                    let xm = wrap(x as isize - 1, self.nx);
-                    let xp = wrap(x as isize + 1, self.nx);
+                let y_off = z_off + y * nx;
+                let y_off_m = z_off + y_minus[y] * nx;
+                let y_off_p = z_off + y_plus[y] * nx;
+                let y_off_zm = z_off_m + y * nx;
+                let y_off_zp = z_off_p + y * nx;
 
-                    let c = idx(self.nx, self.ny, x, y, z);
-                    let u = self.u[c];
-                    let v = self.v[c];
+                for x in 0..nx {
+                    let c = y_off + x;
+                    let uu = u[c];
+                    let vv = v[c];
 
-                    let u_lap = self.u[idx(self.nx, self.ny, xm, y, z)]
-                        + self.u[idx(self.nx, self.ny, xp, y, z)]
-                        + self.u[idx(self.nx, self.ny, x, ym, z)]
-                        + self.u[idx(self.nx, self.ny, x, yp, z)]
-                        + self.u[idx(self.nx, self.ny, x, y, zm)]
-                        + self.u[idx(self.nx, self.ny, x, y, zp)]
-                        - 6.0 * u;
+                    let u_lap = u[y_off + x_minus[x]]
+                        + u[y_off + x_plus[x]]
+                        + u[y_off_m + x]
+                        + u[y_off_p + x]
+                        + u[y_off_zm + x]
+                        + u[y_off_zp + x]
+                        - 6.0 * uu;
 
-                    let v_lap = self.v[idx(self.nx, self.ny, xm, y, z)]
-                        + self.v[idx(self.nx, self.ny, xp, y, z)]
-                        + self.v[idx(self.nx, self.ny, x, ym, z)]
-                        + self.v[idx(self.nx, self.ny, x, yp, z)]
-                        + self.v[idx(self.nx, self.ny, x, y, zm)]
-                        + self.v[idx(self.nx, self.ny, x, y, zp)]
-                        - 6.0 * v;
+                    let v_lap = v[y_off + x_minus[x]]
+                        + v[y_off + x_plus[x]]
+                        + v[y_off_m + x]
+                        + v[y_off_p + x]
+                        + v[y_off_zm + x]
+                        + v[y_off_zp + x]
+                        - 6.0 * vv;
 
-                    let uvv = u * v * v;
-                    let du_dt = du * u_lap - uvv + f * (1.0 - u);
-                    let dv_dt = dv * v_lap + uvv - (f + k) * v;
+                    let uvv = uu * vv * vv;
+                    let du_dt = du * u_lap - uvv + f * (1.0 - uu);
+                    let dv_dt = dv * v_lap + uvv - (f + k) * vv;
 
-                    let u_next = clamp01(u + self.dt * du_dt);
-                    let v_next = clamp01(v + self.dt * dv_dt);
-
-                    self.u2[c] = u_next;
-                    self.v2[c] = v_next;
+                    u2[c] = clamp01(uu + self.dt * du_dt);
+                    v2[c] = clamp01(vv + self.dt * dv_dt);
                 }
             }
         }
 
         std::mem::swap(&mut self.u, &mut self.u2);
         std::mem::swap(&mut self.v, &mut self.v2);
-
-        // Chunk min/max are used for iso culling in meshing.
-        // Recompute them in one cache-friendly pass instead of updating for every voxel.
-        self.recompute_chunk_ranges_from_v();
     }
 
     pub fn v_min(&self) -> f32 {

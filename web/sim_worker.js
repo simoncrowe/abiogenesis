@@ -41,13 +41,16 @@ let simConfig = {
   },
 };
 
-let stepTimer = null;
+// Run the simulation as fast as possible, but only publish snapshots at `periodMs`.
+// Meshing interpolates between the most recent two published snapshots.
+const STEP_TIME_SLICE_MS = 12;
+const STEP_BATCH = 8;
 
-// Exponential moving average of `Simulation.step(1)` duration.
-// Used to start the next step early enough that publishing lands near `periodMs`.
-let emaStepMs = 120;
+let loopTimer = null;
+let isRunning = false;
 
 let lastPublishMs = Date.now();
+let nextPublishMs = lastPublishMs + periodMs;
 
 let totalSteps = 0;
 let stepsWindow = 0;
@@ -55,6 +58,12 @@ let lastRateAt = 0;
 
 function publishSnapshot(nowMs) {
   if (!sim || !ctrlI32 || !vViews || !chunkMinViews || !chunkMaxViews) return;
+
+  // Keep the chunk min/max consistent with the scalar field we’re publishing.
+  // This is used for meshing iso-culling.
+  if (typeof sim.recompute_chunk_ranges_from_v === "function") {
+    sim.recompute_chunk_ranges_from_v();
+  }
 
   const front = Atomics.load(ctrlI32, CTRL_FRONT_INDEX);
   const back = front ^ 1;
@@ -81,38 +90,52 @@ function publishSnapshot(nowMs) {
   }
 }
 
-function scheduleNextStep() {
-  const targetPublishMs = lastPublishMs + periodMs;
-  const startAtMs = targetPublishMs - emaStepMs;
-  const delayMs = Math.max(0, startAtMs - Date.now());
-  if (stepTimer) clearTimeout(stepTimer);
-  stepTimer = setTimeout(stepOnceAndPublish, delayMs);
-}
-
-function stepOnceAndPublish() {
-  if (!sim) return;
-
-  const t0 = performance.now();
-  sim.step(1);
-  const nowMs = Date.now();
-  publishSnapshot(nowMs);
-  const dtMs = performance.now() - t0;
-
-  totalSteps += 1;
-  stepsWindow += 1;
-  emaStepMs = emaStepMs * 0.8 + dtMs * 0.2;
-
+function updateStepsPerSecondStats() {
   const now = performance.now();
   if (lastRateAt === 0) lastRateAt = now;
+
   const elapsed = now - lastRateAt;
-  if (elapsed >= 1000) {
-    const stepsPerSec = stepsWindow / (elapsed / 1000);
-    stepsWindow = 0;
-    lastRateAt = now;
-    self.postMessage({ type: "sim_stats", stepsPerSec, totalSteps });
+  if (elapsed < 1000) return;
+
+  const stepsPerSec = stepsWindow / (elapsed / 1000);
+  stepsWindow = 0;
+  lastRateAt = now;
+  self.postMessage({ type: "sim_stats", stepsPerSec, totalSteps });
+}
+
+function stopLoop() {
+  isRunning = false;
+  if (loopTimer) clearTimeout(loopTimer);
+  loopTimer = null;
+}
+
+function startLoop() {
+  if (isRunning) return;
+  isRunning = true;
+  loop();
+}
+
+function loop() {
+  if (!isRunning || !sim) return;
+
+  const sliceStart = performance.now();
+
+  while (performance.now() - sliceStart < STEP_TIME_SLICE_MS) {
+    const nowMs = Date.now();
+    if (nowMs >= nextPublishMs) {
+      publishSnapshot(nowMs);
+      nextPublishMs = nowMs + periodMs;
+      continue;
+    }
+
+    // Batch steps to reduce JS<->WASM call overhead.
+    sim.step(STEP_BATCH);
+    totalSteps += STEP_BATCH;
+    stepsWindow += STEP_BATCH;
   }
 
-  scheduleNextStep();
+  updateStepsPerSecondStats();
+  loopTimer = setTimeout(loop, 0);
 }
 
 function mergeSimConfig(update) {
@@ -246,12 +269,8 @@ async function ensureWasm() {
 async function restartSimulation() {
   await ensureWasm();
 
-  if (stepTimer) {
-    clearTimeout(stepTimer);
-    stepTimer = null;
-  }
+  stopLoop();
 
-  emaStepMs = 120;
   lastRateAt = 0;
   stepsWindow = 0;
   totalSteps = 0;
@@ -293,13 +312,15 @@ async function restartSimulation() {
   sim.step(1);
   publishSnapshot(Date.now());
 
+  nextPublishMs = lastPublishMs + periodMs;
+
   self.postMessage({ type: "sim_ready" });
-  scheduleNextStep();
+  startLoop();
 }
 
 function clampTicksPerSecond(tps) {
   if (!Number.isFinite(tps)) return 5;
-  return Math.max(1, Math.min(30, Math.trunc(tps)));
+  return Math.max(1, Math.min(60, Math.trunc(tps)));
 }
 
 function applyTicksPerSecond(tps) {
@@ -307,11 +328,15 @@ function applyTicksPerSecond(tps) {
   simConfig.ticksPerSecond = ticksPerSecond;
   periodMs = Math.max(1, Math.round(1000 / ticksPerSecond));
 
+  // When the publish cadence changes, keep the rendered state pinned to the
+  // latest keyframe (t=1) until the next snapshot arrives.
   if (timingI64) {
+    const nowMs = Date.now();
     Atomics.store(timingI64, TIMING_PERIOD_MS, BigInt(periodMs));
+    Atomics.store(timingI64, TIMING_LAST_PUBLISH_MS, BigInt(nowMs - periodMs));
   }
 
-  scheduleNextStep();
+  nextPublishMs = Date.now() + periodMs;
 }
 
 function applyLiveConfigUpdate(update) {
@@ -362,7 +387,7 @@ self.onmessage = (e) => {
     currentSeed = Number.isFinite(msg.seed) ? (Math.trunc(msg.seed) >>> 0) : 1337;
     if (msg.simConfig) mergeSimConfig(msg.simConfig);
 
-    // Keep `periodMs` consistent with config (default: 5 ticks/sec).
+    // Keep `periodMs` consistent with config (default: 5 snapshots/sec).
     if (Number.isFinite(simConfig.ticksPerSecond)) {
       periodMs = Math.max(1, Math.round(1000 / clampTicksPerSecond(simConfig.ticksPerSecond)));
       if (timingI64) Atomics.store(timingI64, TIMING_PERIOD_MS, BigInt(periodMs));

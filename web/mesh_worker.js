@@ -11,6 +11,9 @@ const MESH_INTERVAL_MS = 16;
 
 let wasm;
 let mesher;
+let mesherDims = null;
+let targetDims = null;
+let hasPostedReady = false;
 
 let ctrlI32;
 let vViews;
@@ -33,6 +36,36 @@ function copyFloat32(ptr, len) {
 
 function copyU32(ptr, len) {
   return new Uint32Array(wasm.memory.buffer, ptr, len).slice();
+}
+
+function inferDimsFromVoxelBuffer(buf) {
+  const n = buf?.length ?? 0;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const d = Math.round(Math.cbrt(n));
+  if (d > 0 && d * d * d === n) return d;
+  return null;
+}
+
+function ensureMesher() {
+  if (!wasm) return;
+
+  if (!targetDims && vViews?.[0]) {
+    targetDims = inferDimsFromVoxelBuffer(vViews[0]);
+  }
+
+  const dims = targetDims ?? DEFAULT_DIMS;
+  if (!mesher || mesherDims !== dims) {
+    mesher = new ScalarFieldMesher(dims, dims, dims);
+    mesherDims = dims;
+    lastEpoch = -1;
+    cameraDirty = true;
+  }
+
+  if (!hasPostedReady && mesher) {
+    hasPostedReady = true;
+    self.postMessage({ type: "mesh_ready" });
+    loop();
+  }
 }
 
 function lerp(a, b, t) {
@@ -233,6 +266,9 @@ self.onmessage = (e) => {
     chunkMinViews = [new Float32Array(chunkMinSabs[0]), new Float32Array(chunkMinSabs[1])];
     chunkMaxViews = [new Float32Array(chunkMaxSabs[0]), new Float32Array(chunkMaxSabs[1])];
     timingI64 = msg.timing ? new BigInt64Array(msg.timing) : null;
+
+    targetDims = Number.isFinite(msg.dims) ? Math.trunc(msg.dims) : inferDimsFromVoxelBuffer(vViews[0]);
+    ensureMesher();
     return;
   }
 
@@ -243,9 +279,7 @@ self.onmessage = (e) => {
 
 (async () => {
   wasm = await init();
-  mesher = new ScalarFieldMesher(DEFAULT_DIMS, DEFAULT_DIMS, DEFAULT_DIMS);
-  self.postMessage({ type: "mesh_ready" });
-  loop();
+  ensureMesher();
 })().catch((err) => {
   self.postMessage({ type: "error", message: String(err?.stack || err) });
 });
