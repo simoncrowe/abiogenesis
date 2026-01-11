@@ -752,15 +752,15 @@ pub struct ScalarFieldMesher {
 
     // Two keyframes (prev/current) so we can interpolate meshes without
     // re-uploading the scalar field every frame.
-    chunk_v_min0: Vec<f32>,
-    chunk_v_max0: Vec<f32>,
-    chunk_v_min1: Vec<f32>,
-    chunk_v_max1: Vec<f32>,
+    chunk_min_prev: Vec<f32>,
+    chunk_max_prev: Vec<f32>,
+    chunk_min_next: Vec<f32>,
+    chunk_max_next: Vec<f32>,
 
-    v0: Vec<f32>,
-    v1: Vec<f32>,
+    scalars_prev: Vec<f32>,
+    scalars_next: Vec<f32>,
 
-    has_keyframes: bool,
+    has_initialized_keyframes: bool,
 
     mesh: MeshBuffers,
 }
@@ -787,13 +787,13 @@ impl ScalarFieldMesher {
             chunk_nx,
             chunk_ny,
             chunk_nz,
-            chunk_v_min0: vec![f32::INFINITY; chunk_total],
-            chunk_v_max0: vec![f32::NEG_INFINITY; chunk_total],
-            chunk_v_min1: vec![f32::INFINITY; chunk_total],
-            chunk_v_max1: vec![f32::NEG_INFINITY; chunk_total],
-            v0: vec![0.0; n],
-            v1: vec![0.0; n],
-            has_keyframes: false,
+            chunk_min_prev: vec![f32::INFINITY; chunk_total],
+            chunk_max_prev: vec![f32::NEG_INFINITY; chunk_total],
+            chunk_min_next: vec![f32::INFINITY; chunk_total],
+            chunk_max_next: vec![f32::NEG_INFINITY; chunk_total],
+            scalars_prev: vec![0.0; n],
+            scalars_next: vec![0.0; n],
+            has_initialized_keyframes: false,
             mesh: MeshBuffers::new(),
         }
     }
@@ -808,32 +808,44 @@ impl ScalarFieldMesher {
     }
 
     fn update_chunk_ranges_for_point(
-        chunk_nx: usize,
-        chunk_ny: usize,
-        nx: usize,
-        ny: usize,
-        nz: usize,
-        chunk_v_min: &mut [f32],
-        chunk_v_max: &mut [f32],
-        x: usize,
-        y: usize,
-        z: usize,
-        v: f32,
+        chunk_count_x: usize,
+        chunk_count_y: usize,
+        grid_nx: usize,
+        grid_ny: usize,
+        grid_nz: usize,
+        chunk_min_values: &mut [f32],
+        chunk_max_values: &mut [f32],
+        x_idx: usize,
+        y_idx: usize,
+        z_idx: usize,
+        scalar: f32,
     ) {
-        let cubes_x = nx.saturating_sub(1);
-        let cubes_y = ny.saturating_sub(1);
-        let cubes_z = nz.saturating_sub(1);
+        let cube_count_x = grid_nx.saturating_sub(1);
+        let cube_count_y = grid_ny.saturating_sub(1);
+        let cube_count_z = grid_nz.saturating_sub(1);
 
-        if cubes_x == 0 || cubes_y == 0 || cubes_z == 0 {
+        if cube_count_x == 0 || cube_count_y == 0 || cube_count_z == 0 {
             return;
         }
 
-        let x_left = if x > 0 { x - 1 } else { 0 };
-        let x_right = if x < cubes_x { x } else { cubes_x - 1 };
-        let y_left = if y > 0 { y - 1 } else { 0 };
-        let y_right = if y < cubes_y { y } else { cubes_y - 1 };
-        let z_left = if z > 0 { z - 1 } else { 0 };
-        let z_right = if z < cubes_z { z } else { cubes_z - 1 };
+        let x_left = x_idx.saturating_sub(1);
+        let x_right = if x_idx < cube_count_x {
+            x_idx
+        } else {
+            cube_count_x - 1
+        };
+        let y_left = y_idx.saturating_sub(1);
+        let y_right = if y_idx < cube_count_y {
+            y_idx
+        } else {
+            cube_count_y - 1
+        };
+        let z_left = z_idx.saturating_sub(1);
+        let z_right = if z_idx < cube_count_z {
+            z_idx
+        } else {
+            cube_count_z - 1
+        };
 
         let cx0 = x_left / CHUNK;
         let cx1 = x_right / CHUNK;
@@ -849,57 +861,57 @@ impl ScalarFieldMesher {
         for &cz in &czs {
             for &cy in &cys {
                 for &cx in &cxs {
-                    let i = cx + chunk_nx * (cy + chunk_ny * cz);
-                    let minv = chunk_v_min[i];
-                    let maxv = chunk_v_max[i];
-                    chunk_v_min[i] = if v < minv { v } else { minv };
-                    chunk_v_max[i] = if v > maxv { v } else { maxv };
+                    let chunk_index = cx + chunk_count_x * (cy + chunk_count_y * cz);
+                    let minv = chunk_min_values[chunk_index];
+                    let maxv = chunk_max_values[chunk_index];
+                    chunk_min_values[chunk_index] = if scalar < minv { scalar } else { minv };
+                    chunk_max_values[chunk_index] = if scalar > maxv { scalar } else { maxv };
                 }
             }
         }
     }
 
     pub fn set_v(&mut self, data: &[f32]) {
-        if data.len() != self.v1.len() {
+        if data.len() != self.scalars_next.len() {
             return;
         }
 
-        self.v1.copy_from_slice(data);
+        self.scalars_next.copy_from_slice(data);
 
-        Self::reset_chunk_ranges(&mut self.chunk_v_min1, &mut self.chunk_v_max1);
+        Self::reset_chunk_ranges(&mut self.chunk_min_next, &mut self.chunk_max_next);
 
-        let chunk_nx = self.chunk_nx;
-        let chunk_ny = self.chunk_ny;
-        let nx = self.nx;
-        let ny = self.ny;
-        let nz = self.nz;
+        let chunk_count_x = self.chunk_nx;
+        let chunk_count_y = self.chunk_ny;
+        let grid_nx = self.nx;
+        let grid_ny = self.ny;
+        let grid_nz = self.nz;
 
-        for z in 0..nz {
-            for y in 0..ny {
-                for x in 0..nx {
-                    let i = idx(nx, ny, x, y, z);
+        for z_idx in 0..grid_nz {
+            for y_idx in 0..grid_ny {
+                for x_idx in 0..grid_nx {
+                    let i = idx(grid_nx, grid_ny, x_idx, y_idx, z_idx);
                     Self::update_chunk_ranges_for_point(
-                        chunk_nx,
-                        chunk_ny,
-                        nx,
-                        ny,
-                        nz,
-                        &mut self.chunk_v_min1,
-                        &mut self.chunk_v_max1,
-                        x,
-                        y,
-                        z,
-                        self.v1[i],
+                        chunk_count_x,
+                        chunk_count_y,
+                        grid_nx,
+                        grid_ny,
+                        grid_nz,
+                        &mut self.chunk_min_next,
+                        &mut self.chunk_max_next,
+                        x_idx,
+                        y_idx,
+                        z_idx,
+                        self.scalars_next[i],
                     );
                 }
             }
         }
 
-        if !self.has_keyframes {
-            self.v0.copy_from_slice(&self.v1);
-            self.chunk_v_min0.copy_from_slice(&self.chunk_v_min1);
-            self.chunk_v_max0.copy_from_slice(&self.chunk_v_max1);
-            self.has_keyframes = true;
+        if !self.has_initialized_keyframes {
+            self.scalars_prev.copy_from_slice(&self.scalars_next);
+            self.chunk_min_prev.copy_from_slice(&self.chunk_min_next);
+            self.chunk_max_prev.copy_from_slice(&self.chunk_max_next);
+            self.has_initialized_keyframes = true;
         }
     }
 
@@ -909,25 +921,25 @@ impl ScalarFieldMesher {
         chunk_v_min: &[f32],
         chunk_v_max: &[f32],
     ) {
-        if data.len() != self.v1.len() {
+        if data.len() != self.scalars_next.len() {
             return;
         }
-        if chunk_v_min.len() != self.chunk_v_min1.len() {
+        if chunk_v_min.len() != self.chunk_min_next.len() {
             return;
         }
-        if chunk_v_max.len() != self.chunk_v_max1.len() {
+        if chunk_v_max.len() != self.chunk_max_next.len() {
             return;
         }
 
-        self.v1.copy_from_slice(data);
-        self.chunk_v_min1.copy_from_slice(chunk_v_min);
-        self.chunk_v_max1.copy_from_slice(chunk_v_max);
+        self.scalars_next.copy_from_slice(data);
+        self.chunk_min_next.copy_from_slice(chunk_v_min);
+        self.chunk_max_next.copy_from_slice(chunk_v_max);
 
-        if !self.has_keyframes {
-            self.v0.copy_from_slice(&self.v1);
-            self.chunk_v_min0.copy_from_slice(&self.chunk_v_min1);
-            self.chunk_v_max0.copy_from_slice(&self.chunk_v_max1);
-            self.has_keyframes = true;
+        if !self.has_initialized_keyframes {
+            self.scalars_prev.copy_from_slice(&self.scalars_next);
+            self.chunk_min_prev.copy_from_slice(&self.chunk_min_next);
+            self.chunk_max_prev.copy_from_slice(&self.chunk_max_next);
+            self.has_initialized_keyframes = true;
         }
     }
 
@@ -937,27 +949,27 @@ impl ScalarFieldMesher {
         chunk_v_min: &[f32],
         chunk_v_max: &[f32],
     ) {
-        if !self.has_keyframes {
+        if !self.has_initialized_keyframes {
             self.set_v_with_chunk_ranges(data, chunk_v_min, chunk_v_max);
             return;
         }
-        if data.len() != self.v1.len() {
+        if data.len() != self.scalars_next.len() {
             return;
         }
-        if chunk_v_min.len() != self.chunk_v_min1.len() {
+        if chunk_v_min.len() != self.chunk_min_next.len() {
             return;
         }
-        if chunk_v_max.len() != self.chunk_v_max1.len() {
+        if chunk_v_max.len() != self.chunk_max_next.len() {
             return;
         }
 
-        std::mem::swap(&mut self.v0, &mut self.v1);
-        std::mem::swap(&mut self.chunk_v_min0, &mut self.chunk_v_min1);
-        std::mem::swap(&mut self.chunk_v_max0, &mut self.chunk_v_max1);
+        std::mem::swap(&mut self.scalars_prev, &mut self.scalars_next);
+        std::mem::swap(&mut self.chunk_min_prev, &mut self.chunk_min_next);
+        std::mem::swap(&mut self.chunk_max_prev, &mut self.chunk_max_next);
 
-        self.v1.copy_from_slice(data);
-        self.chunk_v_min1.copy_from_slice(chunk_v_min);
-        self.chunk_v_max1.copy_from_slice(chunk_v_max);
+        self.scalars_next.copy_from_slice(data);
+        self.chunk_min_next.copy_from_slice(chunk_v_min);
+        self.chunk_max_next.copy_from_slice(chunk_v_max);
     }
 
     pub fn generate_mesh_visible(
@@ -974,7 +986,7 @@ impl ScalarFieldMesher {
     ) {
         self.mesh.clear();
 
-        if !self.has_keyframes {
+        if !self.has_initialized_keyframes {
             return;
         }
 
@@ -1038,8 +1050,8 @@ impl ScalarFieldMesher {
             for cy in min_cy..=max_cy {
                 for cx in min_cx..=max_cx {
                     let ci = self.chunk_index(cx, cy, cz);
-                    let cmin = self.chunk_v_min1[ci];
-                    let cmax = self.chunk_v_max1[ci];
+                    let cmin = self.chunk_min_next[ci];
+                    let cmax = self.chunk_max_next[ci];
                     if !cmin.is_finite() {
                         continue;
                     }
@@ -1088,7 +1100,7 @@ impl ScalarFieldMesher {
                     };
 
                     mesh_region_append(
-                        &self.v1,
+                        &self.scalars_next,
                         self.nx,
                         self.ny,
                         self.nz,
@@ -1110,7 +1122,7 @@ impl ScalarFieldMesher {
 
     pub fn generate_mesh_visible_lerp(
         &mut self,
-        t: f32,
+        lerp_t: f32,
         cam_x: f32,
         cam_y: f32,
         cam_z: f32,
@@ -1123,11 +1135,11 @@ impl ScalarFieldMesher {
     ) {
         self.mesh.clear();
 
-        if !self.has_keyframes {
+        if !self.has_initialized_keyframes {
             return;
         }
 
-        let t = t.max(0.0).min(1.0);
+        let lerp_t = lerp_t.max(0.0).min(1.0);
 
         let cubes_x = self.nx.saturating_sub(1);
         let cubes_y = self.ny.saturating_sub(1);
@@ -1191,8 +1203,8 @@ impl ScalarFieldMesher {
                     let ci = self.chunk_index(cx, cy, cz);
 
                     // Conservative bounds for the interpolated field.
-                    let cmin = self.chunk_v_min0[ci].min(self.chunk_v_min1[ci]);
-                    let cmax = self.chunk_v_max0[ci].max(self.chunk_v_max1[ci]);
+                    let cmin = self.chunk_min_prev[ci].min(self.chunk_min_next[ci]);
+                    let cmax = self.chunk_max_prev[ci].max(self.chunk_max_next[ci]);
                     if !cmin.is_finite() {
                         continue;
                     }
@@ -1241,9 +1253,9 @@ impl ScalarFieldMesher {
                     };
 
                     mesh_region_append_lerp(
-                        &self.v0,
-                        &self.v1,
-                        t,
+                        &self.scalars_prev,
+                        &self.scalars_next,
+                        lerp_t,
                         self.nx,
                         self.ny,
                         self.nz,

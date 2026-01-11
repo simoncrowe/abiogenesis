@@ -24,26 +24,26 @@ impl MeshBuffers {
         self.indices.clear();
     }
 
-    fn push_vertex(&mut self, pos: [f32; 3], nor: [f32; 3], col: [f32; 4]) -> u32 {
-        let idx = (self.positions.len() / 3) as u32;
-        self.positions.extend_from_slice(&pos);
-        self.normals.extend_from_slice(&nor);
-        self.colors.extend_from_slice(&col);
-        idx
+    fn push_vertex(&mut self, position: [f32; 3], normal: [f32; 3], color: [f32; 4]) -> u32 {
+        let vertex_index = (self.positions.len() / 3) as u32;
+        self.positions.extend_from_slice(&position);
+        self.normals.extend_from_slice(&normal);
+        self.colors.extend_from_slice(&color);
+        vertex_index
     }
 
-    fn push_triangle(&mut self, a: Vertex, b: Vertex, c: Vertex, col: [f32; 4]) {
-        let ia = self.push_vertex(a.pos, a.nor, col);
-        let ib = self.push_vertex(b.pos, b.nor, col);
-        let ic = self.push_vertex(c.pos, c.nor, col);
+    fn push_triangle(&mut self, a: Vertex, b: Vertex, c: Vertex, color: [f32; 4]) {
+        let ia = self.push_vertex(a.position, a.normal, color);
+        let ib = self.push_vertex(b.position, b.normal, color);
+        let ic = self.push_vertex(c.position, c.normal, color);
         self.indices.extend_from_slice(&[ia, ib, ic]);
     }
 }
 
 #[derive(Clone, Copy)]
 struct Vertex {
-    pos: [f32; 3],
-    nor: [f32; 3],
+    position: [f32; 3],
+    normal: [f32; 3],
 }
 
 fn idx(nx: usize, ny: usize, x: usize, y: usize, z: usize) -> usize {
@@ -81,16 +81,16 @@ fn gradient(
     [dx, dy, dz]
 }
 
-fn sample_lerp(a: &[f32], b: &[f32], t: f32, i: usize) -> f32 {
-    let va = a[i];
-    let vb = b[i];
-    va + (vb - va) * t
+fn sample_lerp(scalars_prev: &[f32], scalars_next: &[f32], lerp_t: f32, index: usize) -> f32 {
+    let v_prev = scalars_prev[index];
+    let v_next = scalars_next[index];
+    v_prev + (v_next - v_prev) * lerp_t
 }
 
 fn gradient_lerp(
-    a: &[f32],
-    b: &[f32],
-    t: f32,
+    scalars_prev: &[f32],
+    scalars_next: &[f32],
+    lerp_t: f32,
     nx: usize,
     ny: usize,
     nz: usize,
@@ -98,22 +98,46 @@ fn gradient_lerp(
     y: usize,
     z: usize,
 ) -> [f32; 3] {
-    let xm = wrap(x as isize - 1, nx);
-    let xp = wrap(x as isize + 1, nx);
-    let ym = wrap(y as isize - 1, ny);
-    let yp = wrap(y as isize + 1, ny);
-    let zm = wrap(z as isize - 1, nz);
-    let zp = wrap(z as isize + 1, nz);
+    let x_minus = wrap(x as isize - 1, nx);
+    let x_plus = wrap(x as isize + 1, nx);
+    let y_minus = wrap(y as isize - 1, ny);
+    let y_plus = wrap(y as isize + 1, ny);
+    let z_minus = wrap(z as isize - 1, nz);
+    let z_plus = wrap(z as isize + 1, nz);
 
-    let dx = (sample_lerp(a, b, t, idx(nx, ny, xp, y, z))
-        - sample_lerp(a, b, t, idx(nx, ny, xm, y, z)))
-        * 0.5;
-    let dy = (sample_lerp(a, b, t, idx(nx, ny, x, yp, z))
-        - sample_lerp(a, b, t, idx(nx, ny, x, ym, z)))
-        * 0.5;
-    let dz = (sample_lerp(a, b, t, idx(nx, ny, x, y, zp))
-        - sample_lerp(a, b, t, idx(nx, ny, x, y, zm)))
-        * 0.5;
+    let dx = (sample_lerp(
+        scalars_prev,
+        scalars_next,
+        lerp_t,
+        idx(nx, ny, x_plus, y, z),
+    ) - sample_lerp(
+        scalars_prev,
+        scalars_next,
+        lerp_t,
+        idx(nx, ny, x_minus, y, z),
+    )) * 0.5;
+    let dy = (sample_lerp(
+        scalars_prev,
+        scalars_next,
+        lerp_t,
+        idx(nx, ny, x, y_plus, z),
+    ) - sample_lerp(
+        scalars_prev,
+        scalars_next,
+        lerp_t,
+        idx(nx, ny, x, y_minus, z),
+    )) * 0.5;
+    let dz = (sample_lerp(
+        scalars_prev,
+        scalars_next,
+        lerp_t,
+        idx(nx, ny, x, y, z_plus),
+    ) - sample_lerp(
+        scalars_prev,
+        scalars_next,
+        lerp_t,
+        idx(nx, ny, x, y, z_minus),
+    )) * 0.5;
     [dx, dy, dz]
 }
 
@@ -133,18 +157,18 @@ fn interp_vertex(
         ((iso - v0) / denom).max(0.0).min(1.0)
     };
 
-    let pos = [
+    let position = [
         lerp(p0[0], p1[0], t),
         lerp(p0[1], p1[1], t),
         lerp(p0[2], p1[2], t),
     ];
-    let nor = [
+    let normal = [
         lerp(n0[0], n1[0], t),
         lerp(n0[1], n1[1], t),
         lerp(n0[2], n1[2], t),
     ];
 
-    Vertex { pos, nor }
+    Vertex { position, normal }
 }
 
 fn polygonise_tetra(
@@ -281,7 +305,7 @@ pub fn mesh_region_append(
                 let y1w = y1i as f32 / fy - 0.5;
                 let z1w = z1i as f32 / fz - 0.5;
 
-                let pos = [
+                let corner_positions = [
                     [x0w, y0w, z0w],
                     [x1w, y0w, z0w],
                     [x1w, y1w, z0w],
@@ -292,7 +316,7 @@ pub fn mesh_region_append(
                     [x0w, y1w, z1w],
                 ];
 
-                let vi = [
+                let corner_indices = [
                     idx(nx, ny, x, y, z),
                     idx(nx, ny, x1i, y, z),
                     idx(nx, ny, x1i, y1i, z),
@@ -303,29 +327,29 @@ pub fn mesh_region_append(
                     idx(nx, ny, x, y1i, z1i),
                 ];
 
-                let val = [
-                    scalars[vi[0]],
-                    scalars[vi[1]],
-                    scalars[vi[2]],
-                    scalars[vi[3]],
-                    scalars[vi[4]],
-                    scalars[vi[5]],
-                    scalars[vi[6]],
-                    scalars[vi[7]],
+                let corner_values = [
+                    scalars[corner_indices[0]],
+                    scalars[corner_indices[1]],
+                    scalars[corner_indices[2]],
+                    scalars[corner_indices[3]],
+                    scalars[corner_indices[4]],
+                    scalars[corner_indices[5]],
+                    scalars[corner_indices[6]],
+                    scalars[corner_indices[7]],
                 ];
 
                 // Early out for fully inside/outside cube.
                 let mut any_below = false;
                 let mut any_above = false;
-                for &s in &val {
-                    if s < iso {
+                for &scalar in &corner_values {
+                    if scalar < iso {
                         any_below = true;
                     } else {
                         any_above = true;
                     }
                 }
                 if any_below && any_above {
-                    let nor = [
+                    let corner_normals = [
                         gradient(scalars, nx, ny, nz, x, y, z),
                         gradient(scalars, nx, ny, nz, x1i, y, z),
                         gradient(scalars, nx, ny, nz, x1i, y1i, z),
@@ -336,10 +360,25 @@ pub fn mesh_region_append(
                         gradient(scalars, nx, ny, nz, x, y1i, z1i),
                     ];
 
-                    for t in tetra {
-                        let p4 = [pos[t[0]], pos[t[1]], pos[t[2]], pos[t[3]]];
-                        let v4 = [val[t[0]], val[t[1]], val[t[2]], val[t[3]]];
-                        let n4 = [nor[t[0]], nor[t[1]], nor[t[2]], nor[t[3]]];
+                    for tet in tetra {
+                        let p4 = [
+                            corner_positions[tet[0]],
+                            corner_positions[tet[1]],
+                            corner_positions[tet[2]],
+                            corner_positions[tet[3]],
+                        ];
+                        let v4 = [
+                            corner_values[tet[0]],
+                            corner_values[tet[1]],
+                            corner_values[tet[2]],
+                            corner_values[tet[3]],
+                        ];
+                        let n4 = [
+                            corner_normals[tet[0]],
+                            corner_normals[tet[1]],
+                            corner_normals[tet[2]],
+                            corner_normals[tet[3]],
+                        ];
                         polygonise_tetra(out, iso, p4, v4, n4, color);
                     }
                 }
@@ -353,9 +392,9 @@ pub fn mesh_region_append(
 }
 
 pub fn mesh_region_append_lerp(
-    scalars0: &[f32],
-    scalars1: &[f32],
-    t: f32,
+    scalars_prev: &[f32],
+    scalars_next: &[f32],
+    lerp_t: f32,
     nx: usize,
     ny: usize,
     nz: usize,
@@ -376,7 +415,7 @@ pub fn mesh_region_append_lerp(
     if stride == 0 {
         return;
     }
-    if scalars0.len() != scalars1.len() {
+    if scalars_prev.len() != scalars_next.len() {
         return;
     }
 
@@ -427,7 +466,7 @@ pub fn mesh_region_append_lerp(
                 let y1w = y1i as f32 / fy - 0.5;
                 let z1w = z1i as f32 / fz - 0.5;
 
-                let pos = [
+                let corner_positions = [
                     [x0w, y0w, z0w],
                     [x1w, y0w, z0w],
                     [x1w, y1w, z0w],
@@ -438,7 +477,7 @@ pub fn mesh_region_append_lerp(
                     [x0w, y1w, z1w],
                 ];
 
-                let vi = [
+                let corner_indices = [
                     idx(nx, ny, x, y, z),
                     idx(nx, ny, x1i, y, z),
                     idx(nx, ny, x1i, y1i, z),
@@ -449,43 +488,68 @@ pub fn mesh_region_append_lerp(
                     idx(nx, ny, x, y1i, z1i),
                 ];
 
-                let val = [
-                    sample_lerp(scalars0, scalars1, t, vi[0]),
-                    sample_lerp(scalars0, scalars1, t, vi[1]),
-                    sample_lerp(scalars0, scalars1, t, vi[2]),
-                    sample_lerp(scalars0, scalars1, t, vi[3]),
-                    sample_lerp(scalars0, scalars1, t, vi[4]),
-                    sample_lerp(scalars0, scalars1, t, vi[5]),
-                    sample_lerp(scalars0, scalars1, t, vi[6]),
-                    sample_lerp(scalars0, scalars1, t, vi[7]),
+                let corner_values = [
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[0]),
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[1]),
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[2]),
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[3]),
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[4]),
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[5]),
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[6]),
+                    sample_lerp(scalars_prev, scalars_next, lerp_t, corner_indices[7]),
                 ];
 
                 // Early out for fully inside/outside cube.
                 let mut any_below = false;
                 let mut any_above = false;
-                for &s in &val {
-                    if s < iso {
+                for &scalar in &corner_values {
+                    if scalar < iso {
                         any_below = true;
                     } else {
                         any_above = true;
                     }
                 }
                 if any_below && any_above {
-                    let nor = [
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x, y, z),
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x1i, y, z),
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x1i, y1i, z),
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x, y1i, z),
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x, y, z1i),
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x1i, y, z1i),
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x1i, y1i, z1i),
-                        gradient_lerp(scalars0, scalars1, t, nx, ny, nz, x, y1i, z1i),
+                    let corner_normals = [
+                        gradient_lerp(scalars_prev, scalars_next, lerp_t, nx, ny, nz, x, y, z),
+                        gradient_lerp(scalars_prev, scalars_next, lerp_t, nx, ny, nz, x1i, y, z),
+                        gradient_lerp(scalars_prev, scalars_next, lerp_t, nx, ny, nz, x1i, y1i, z),
+                        gradient_lerp(scalars_prev, scalars_next, lerp_t, nx, ny, nz, x, y1i, z),
+                        gradient_lerp(scalars_prev, scalars_next, lerp_t, nx, ny, nz, x, y, z1i),
+                        gradient_lerp(scalars_prev, scalars_next, lerp_t, nx, ny, nz, x1i, y, z1i),
+                        gradient_lerp(
+                            scalars_prev,
+                            scalars_next,
+                            lerp_t,
+                            nx,
+                            ny,
+                            nz,
+                            x1i,
+                            y1i,
+                            z1i,
+                        ),
+                        gradient_lerp(scalars_prev, scalars_next, lerp_t, nx, ny, nz, x, y1i, z1i),
                     ];
 
                     for tet in tetra {
-                        let p4 = [pos[tet[0]], pos[tet[1]], pos[tet[2]], pos[tet[3]]];
-                        let v4 = [val[tet[0]], val[tet[1]], val[tet[2]], val[tet[3]]];
-                        let n4 = [nor[tet[0]], nor[tet[1]], nor[tet[2]], nor[tet[3]]];
+                        let p4 = [
+                            corner_positions[tet[0]],
+                            corner_positions[tet[1]],
+                            corner_positions[tet[2]],
+                            corner_positions[tet[3]],
+                        ];
+                        let v4 = [
+                            corner_values[tet[0]],
+                            corner_values[tet[1]],
+                            corner_values[tet[2]],
+                            corner_values[tet[3]],
+                        ];
+                        let n4 = [
+                            corner_normals[tet[0]],
+                            corner_normals[tet[1]],
+                            corner_normals[tet[2]],
+                            corner_normals[tet[3]],
+                        ];
                         polygonise_tetra(out, iso, p4, v4, n4, color);
                     }
                 }
