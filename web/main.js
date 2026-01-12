@@ -316,13 +316,13 @@ async function main() {
 
   const cam = new FlyCamera();
 
-  let viewRadius = 1;
+  let viewRadius = 0.6;
   let volumeThreshold = 0.25;
   let gradMagGain = 12.0;
   const meshColor = [0.15, 0.65, 0.9, 0.75];
 
   const fogColor = [0.04, 0.06, 0.14];
-  const fogDensity = 8.0;
+  const fogDensity = 10.0;
 
   const gpuMesh = createMeshGpu(gl);
 
@@ -370,13 +370,22 @@ async function main() {
     );
   }
 
-  const dims = 128;
 
   const simStrategies = {
     gray_scott: {
       id: "gray_scott",
       name: "Gray–Scott reaction–diffusion",
       params: [
+        {
+          key: "dims",
+          path: ["dims"],
+          label: "Grid size (dims)",
+          min: 16,
+          max: 256,
+          step: 1,
+          defaultValue: 128,
+          requiresRestart: true,
+        },
         {
           key: "du",
           path: ["params", "du"],
@@ -440,6 +449,11 @@ async function main() {
       ],
       seedings: [
         {
+          id: "perlin",
+          name: "Perlin noise",
+          config: { type: "perlin", frequency: 5.0, octaves: 5, v_bias: 0.0, v_amp: 1.0 },
+        },
+        {
           id: "classic",
           name: "Random spheres + noise (long-lived)",
           config: {
@@ -452,10 +466,52 @@ async function main() {
             v: 0.25,
           },
         },
+      ],
+    },
+
+    stochastic_rdme: {
+      id: "stochastic_rdme",
+      name: "Stochastic RDME (τ-leaping)",
+      params: [
+        { key: "dims", path: ["dims"], label: "Grid size (dims)", min: 16, max: 256, step: 1, defaultValue: 64, requiresRestart: true },
+        { key: "df", path: ["params", "df"], label: "Food diffusion (Df)", min: 0, max: 1, step: 0.001, defaultValue: 0.2, requiresRestart: true },
+        { key: "da", path: ["params", "da"], label: "Catalyst diffusion (Da)", min: 0, max: 1, step: 0.001, defaultValue: 0.05, requiresRestart: true },
+        { key: "di", path: ["params", "di"], label: "Inhibitor diffusion (Di)", min: 0, max: 1, step: 0.001, defaultValue: 0.02, requiresRestart: true },
+
+        { key: "k1", path: ["params", "k1"], label: "Autocatalysis rate (k1)", min: 0, max: 0.01, step: 0.0001, defaultValue: 0.002, requiresRestart: true },
+        { key: "k2", path: ["params", "k2"], label: "Inhibitor production (k2)", min: 0, max: 0.2, step: 0.001, defaultValue: 0.02, requiresRestart: true },
+        { key: "k3", path: ["params", "k3"], label: "Inhibition rate (k3)", min: 0, max: 0.01, step: 0.0001, defaultValue: 0.001, requiresRestart: true },
+
+        { key: "feedBase", path: ["params", "feedBase"], label: "Feed base rate", min: 0, max: 20, step: 0.1, defaultValue: 2.0, requiresRestart: true },
+        { key: "feedNoiseAmp", path: ["params", "feedNoiseAmp"], label: "Feed noise amplitude", min: 0, max: 2, step: 0.01, defaultValue: 0.35, requiresRestart: true },
+        { key: "feedNoiseScale", path: ["params", "feedNoiseScale"], label: "Feed noise scale (voxels)", min: 1, max: 64, step: 1, defaultValue: 8, requiresRestart: true },
+
+        { key: "decayA", path: ["params", "decayA"], label: "Catalyst decay (dA)", min: 0, max: 0.2, step: 0.001, defaultValue: 0.01, requiresRestart: true },
+        { key: "decayI", path: ["params", "decayI"], label: "Inhibitor decay (dI)", min: 0, max: 0.2, step: 0.001, defaultValue: 0.005, requiresRestart: true },
+        { key: "decayF", path: ["params", "decayF"], label: "Food decay (dF)", min: 0, max: 0.2, step: 0.001, defaultValue: 0.0, requiresRestart: true },
+
+        { key: "alivenessAlpha", path: ["params", "alivenessAlpha"], label: "Aliveness inhibitor weight (α)", min: 0, max: 5, step: 0.01, defaultValue: 0.25, requiresRestart: true },
+        { key: "alivenessGain", path: ["params", "alivenessGain"], label: "Aliveness gain", min: 0.0001, max: 1, step: 0.001, defaultValue: 0.05, requiresRestart: true },
+
+        { key: "dt", path: ["dt"], label: "Time step (dt)", min: 0.001, max: 0.2, step: 0.001, defaultValue: 0.05, requiresRestart: false },
+        { key: "ticksPerSecond", path: ["ticksPerSecond"], label: "Snapshot ticks per second", min: 1, max: 60, step: 1, defaultValue: 30, requiresRestart: false },
+      ],
+      seedings: [
         {
-          id: "perlin",
-          name: "Perlin noise",
-          config: { type: "perlin", frequency: 6.0, octaves: 4, v_bias: 0.0, v_amp: 1.0 },
+          id: "spheres",
+          name: "Catalyst spheres + noise",
+          config: {
+            type: "spheres",
+            radius01: 0.05,
+            sphereCount: 20,
+            baseF: 50,
+            baseA: 0,
+            baseI: 0,
+            sphereF: 25,
+            sphereA: 20,
+            sphereI: 0,
+            aNoiseProb: 0.02,
+          },
         },
       ],
     },
@@ -463,6 +519,7 @@ async function main() {
 
   const simConfig = {
     strategyId: "gray_scott",
+    dims: 128,
     params: {},
     dt: 0.1,
     ticksPerSecond: 5,
@@ -471,7 +528,6 @@ async function main() {
 
   resetSimConfigForStrategy(simConfig.strategyId);
 
-  const n = dims * dims * dims;
 
   let simWorker = null;
   let meshWorker = null;
@@ -490,8 +546,17 @@ async function main() {
     meshReady = false;
   }
 
+  function clampDims(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 128;
+    return Math.max(16, Math.min(256, Math.trunc(n)));
+  }
+
   function startWorkers(seed) {
     stopWorkers();
+
+    const dims = clampDims(simConfig.dims);
+    const n = dims * dims * dims;
 
     // Reset UI + mesh.
     statsEl.textContent = "";
@@ -640,6 +705,8 @@ async function main() {
     for (const p of strategy.params) {
       if (p.path.length === 2 && p.path[0] === "params") {
         simConfig.params[p.path[1]] = p.defaultValue;
+      } else if (p.path.length === 1 && p.path[0] === "dims") {
+        simConfig.dims = p.defaultValue;
       } else if (p.path.length === 1 && p.path[0] === "dt") {
         simConfig.dt = p.defaultValue;
       } else if (p.path.length === 1 && p.path[0] === "ticksPerSecond") {
@@ -698,13 +765,21 @@ async function main() {
       const initialValue = getSimConfigValue(p.path) ?? p.defaultValue;
       setNumberInputValue(input, initialValue, p.step);
 
-      const applyValue = (format) => {
+        const applyValue = (format) => {
         const cur = getSimConfigValue(p.path) ?? p.defaultValue;
         const next = parseClampedFloat(input.value, cur, p.min, p.max);
         setSimConfigValue(p.path, next);
         if (format) setNumberInputValue(input, next, p.step);
+
+        // `dims` changes require reallocating shared buffers.
+        if (p.path.length === 1 && p.path[0] === "dims") {
+          restartFromUi();
+          return;
+        }
+
         simWorker?.postMessage({ type: "sim_config", config: buildSimConfigUpdate(p.path, next) });
       };
+
 
       if (p.requiresRestart) {
         input.addEventListener("change", () => applyValue(true));
@@ -759,9 +834,16 @@ async function main() {
 
     simStrategySelect.onchange = () => {
       const nextId = simStrategySelect.value;
+      const prevDims = simConfig.dims;
       resetSimConfigForStrategy(nextId);
       renderSimInitSelect();
       renderSimParams();
+
+      if (simConfig.dims !== prevDims) {
+        restartFromUi();
+        return;
+      }
+
       simWorker?.postMessage({ type: "sim_config", config: simConfig });
     };
   }
