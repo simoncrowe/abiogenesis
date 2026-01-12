@@ -1,4 +1,9 @@
-import init, { GrayScottParams, Simulation } from "../wasm/web/pkg/abiogenesis.js";
+import init, {
+  GrayScottParams,
+  Simulation,
+  StochasticRdmeParams,
+  StochasticRdmeSimulation,
+} from "../wasm/web/pkg/abiogenesis.js";
 
 const CTRL_EPOCH = 0;
 const CTRL_FRONT_INDEX = 1;
@@ -165,6 +170,12 @@ function clamp01(v) {
   return Math.max(0, Math.min(1, v));
 }
 
+function toU32(v, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return (Math.trunc(fallback) >>> 0);
+  return (Math.max(0, Math.min(2 ** 32 - 1, Math.trunc(n))) >>> 0);
+}
+
 function makeSeededRng(seed) {
   // Simple deterministic LCG (matches the style used in the Rust codebase).
   let state = (seed ^ 0x9e3779b9) >>> 0;
@@ -275,31 +286,74 @@ async function restartSimulation() {
   stepsWindow = 0;
   totalSteps = 0;
 
-  if (simConfig.strategyId !== "gray_scott") {
-    throw new Error(`unknown simulation strategy: ${String(simConfig.strategyId)}`);
-  }
+  const strategyId = String(simConfig.strategyId || "gray_scott");
 
-  const params = new GrayScottParams();
-  params.set_du(Number(simConfig.params?.du ?? 0.16));
-  params.set_dv(Number(simConfig.params?.dv ?? 0.08));
-  params.set_feed(Number(simConfig.params?.feed ?? 0.037));
-  params.set_kill(Number(simConfig.params?.kill ?? 0.06));
+  if (strategyId === "gray_scott") {
+    const params = new GrayScottParams();
+    params.set_du(Number(simConfig.params?.du ?? 0.16));
+    params.set_dv(Number(simConfig.params?.dv ?? 0.08));
+    params.set_feed(Number(simConfig.params?.feed ?? 0.037));
+    params.set_kill(Number(simConfig.params?.kill ?? 0.06));
 
-  sim = new Simulation(dims, dims, dims, currentSeed, params);
-  sim.set_dt(Number(simConfig.dt ?? 0.1));
+    sim = new Simulation(dims, dims, dims, currentSeed, params);
+    sim.set_dt(Number(simConfig.dt ?? 0.1));
 
-  const seeding = simConfig.seeding ?? {};
-  if (seeding.type === "perlin") {
-    sim.seed_perlin(
-      Number(seeding.frequency ?? 6.0),
-      Number(seeding.octaves ?? 4),
-      Number(seeding.v_bias ?? 0.0),
-      Number(seeding.v_amp ?? 1.0),
-    );
-  } else if (seeding.type === "classic") {
-    seedClassic(sim, dims, currentSeed, seeding);
+    const seeding = simConfig.seeding ?? {};
+    if (seeding.type === "perlin") {
+      sim.seed_perlin(
+        Number(seeding.frequency ?? 6.0),
+        Number(seeding.octaves ?? 4),
+        Number(seeding.v_bias ?? 0.0),
+        Number(seeding.v_amp ?? 1.0),
+      );
+    } else if (seeding.type === "classic") {
+      seedClassic(sim, dims, currentSeed, seeding);
+    } else {
+      throw new Error(`unknown seeding type: ${String(seeding.type)}`);
+    }
+  } else if (strategyId === "stochastic_rdme") {
+    const params = new StochasticRdmeParams();
+
+    params.set_df(Number(simConfig.params?.df ?? 0.2));
+    params.set_da(Number(simConfig.params?.da ?? 0.05));
+    params.set_di(Number(simConfig.params?.di ?? 0.02));
+
+    params.set_k1(Number(simConfig.params?.k1 ?? 0.002));
+    params.set_k2(Number(simConfig.params?.k2 ?? 0.02));
+    params.set_k3(Number(simConfig.params?.k3 ?? 0.001));
+
+    params.set_feed_base(Number(simConfig.params?.feedBase ?? 2.0));
+    params.set_feed_noise_amp(Number(simConfig.params?.feedNoiseAmp ?? 0.35));
+    params.set_feed_noise_scale(toU32(simConfig.params?.feedNoiseScale, 8));
+
+    params.set_d_a(Number(simConfig.params?.decayA ?? 0.01));
+    params.set_d_i(Number(simConfig.params?.decayI ?? 0.005));
+    params.set_d_f(Number(simConfig.params?.decayF ?? 0.0));
+
+    params.set_aliveness_alpha(Number(simConfig.params?.alivenessAlpha ?? 0.25));
+    params.set_aliveness_gain(Number(simConfig.params?.alivenessGain ?? 0.05));
+
+    sim = new StochasticRdmeSimulation(dims, dims, dims, currentSeed, params);
+    sim.set_dt(Number(simConfig.dt ?? 0.05));
+
+    const seeding = simConfig.seeding ?? {};
+    if (!seeding.type || seeding.type === "spheres") {
+      sim.seed_spheres(
+        Number(seeding.radius01 ?? 0.05),
+        toU32(seeding.sphereCount, 20),
+        toU32(seeding.baseF, 50),
+        toU32(seeding.baseA, 0),
+        toU32(seeding.baseI, 0),
+        toU32(seeding.sphereF, 25),
+        toU32(seeding.sphereA, 20),
+        toU32(seeding.sphereI, 0),
+        Number(seeding.aNoiseProb ?? 0.02),
+      );
+    } else {
+      throw new Error(`unknown rdme seeding type: ${String(seeding.type)}`);
+    }
   } else {
-    throw new Error(`unknown seeding type: ${String(seeding.type)}`);
+    throw new Error(`unknown simulation strategy: ${String(strategyId)}`);
   }
 
   const chunkLen = sim.chunk_v_len();
@@ -403,17 +457,13 @@ self.onmessage = (e) => {
     const update = msg.config && typeof msg.config === "object" ? msg.config : msg;
 
     const prevStrategyId = simConfig.strategyId;
-    const prevParams = { ...simConfig.params };
     mergeSimConfig(update);
 
-    const paramsChanged =
-      prevParams.du !== simConfig.params.du ||
-      prevParams.dv !== simConfig.params.dv ||
-      prevParams.feed !== simConfig.params.feed ||
-      prevParams.kill !== simConfig.params.kill ||
-      update.seeding;
+    const strategyChanged = prevStrategyId !== simConfig.strategyId;
+    const paramsChanged = !!(update.params && Object.keys(update.params).length > 0);
+    const seedingChanged = !!update.seeding;
 
-    if (prevStrategyId !== simConfig.strategyId || paramsChanged) {
+    if (strategyChanged || paramsChanged || seedingChanged) {
       void restartSimulation().catch((err) => {
         self.postMessage({ type: "error", message: String(err?.stack || err) });
       });
