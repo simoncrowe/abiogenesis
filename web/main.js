@@ -449,6 +449,11 @@ async function main() {
       ],
       seedings: [
         {
+          id: "perlin",
+          name: "Perlin noise",
+          config: { type: "perlin", frequency: 5.0, octaves: 5, v_bias: 0.0, v_amp: 1.0 },
+        },
+        {
           id: "classic",
           name: "Random spheres + noise (long-lived)",
           config: {
@@ -460,11 +465,6 @@ async function main() {
             u: 0.5,
             v: 0.25,
           },
-        },
-        {
-          id: "perlin",
-          name: "Perlin noise",
-          config: { type: "perlin", frequency: 6.0, octaves: 4, v_bias: 0.0, v_amp: 1.0 },
         },
       ],
     },

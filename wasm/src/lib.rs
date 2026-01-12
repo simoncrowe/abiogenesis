@@ -3,12 +3,14 @@ use wasm_bindgen::prelude::*;
 mod math;
 mod meshing;
 
-mod rdme;
+mod gray_scott;
 #[path = "sim.rs"]
-mod simulation;
+mod mesher;
+mod rdme;
 
+pub use gray_scott::{GrayScottParams, Simulation};
+pub use mesher::ScalarFieldMesher;
 pub use rdme::{StochasticRdmeParams, StochasticRdmeSimulation};
-pub use simulation::{GrayScottParams, ScalarFieldMesher, Simulation};
 
 #[wasm_bindgen(start)]
 pub fn wasm_start() {
