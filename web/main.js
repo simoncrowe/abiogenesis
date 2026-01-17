@@ -1,5 +1,5 @@
 import { FlyCamera, createMouseFlightController } from "./camera.js";
-import { createMeshProgram, createWeightedOitRenderer } from "./shaders.js";
+import { createMeshProgram } from "./shaders.js";
 import { createHudController } from "./config.js";
 
 const canvas = document.querySelector("#c");
@@ -121,7 +121,6 @@ async function main() {
   if (!gl) throw new Error("WebGL2 not supported");
 
   const { program: meshProgram, uniforms: meshUniforms } = createMeshProgram(gl);
-  const oitRenderer = createWeightedOitRenderer(gl);
 
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
@@ -219,7 +218,6 @@ async function main() {
   const hud = createHudController({
     onRestart: (seed, simConfig) => startWorkers(seed, simConfig),
     getWorker: () => computeWorker,
-    oitSupported: !!oitRenderer,
   });
 
   // Camera -> worker updates.
@@ -271,9 +269,8 @@ async function main() {
     const dt = Math.min(0.05, (tNow - lastT) / 1000);
     lastT = tNow;
 
-    const resized = resizeCanvasToDisplaySize(canvas);
+    resizeCanvasToDisplaySize(canvas);
     gl.viewport(0, 0, canvas.width, canvas.height);
-    if (resized && oitRenderer) oitRenderer.resize(canvas.width, canvas.height);
 
     cameraController.update(dt);
     sendCamera();
@@ -288,40 +285,23 @@ async function main() {
     gl.clearColor(fogColor[0], fogColor[1], fogColor[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    const transparencyMode = hud.getTransparencyMode();
+    gl.useProgram(meshProgram);
+    gl.uniformMatrix4fv(meshUniforms.uViewProj, false, viewProj);
+    gl.uniform3f(meshUniforms.uLightDir, lightDir[0], lightDir[1], lightDir[2]);
+    gl.uniform3f(meshUniforms.uCamPos, cam.pos[0], cam.pos[1], cam.pos[2]);
+    gl.uniform3f(meshUniforms.uFogColor, fogColor[0], fogColor[1], fogColor[2]);
+    gl.uniform1f(meshUniforms.uFogDensity, fogDensity);
 
-    if (transparencyMode === "oit" && oitRenderer && gpuMesh.indexCount > 0) {
-      oitRenderer.render({
-        canvasWidth: canvas.width,
-        canvasHeight: canvas.height,
-        vao: gpuMesh.vao,
-        indexCount: gpuMesh.indexCount,
-        viewProj,
-        camPos: cam.pos,
-        lightDir,
-        fogColor,
-        fogDensity,
-        oitWeight: hud.getOitWeight(),
-      });
-    } else {
-      gl.useProgram(meshProgram);
-      gl.uniformMatrix4fv(meshUniforms.uViewProj, false, viewProj);
-      gl.uniform3f(meshUniforms.uLightDir, lightDir[0], lightDir[1], lightDir[2]);
-      gl.uniform3f(meshUniforms.uCamPos, cam.pos[0], cam.pos[1], cam.pos[2]);
-      gl.uniform3f(meshUniforms.uFogColor, fogColor[0], fogColor[1], fogColor[2]);
-      gl.uniform1f(meshUniforms.uFogDensity, fogDensity);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-      gl.enable(gl.DEPTH_TEST);
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-
-      gl.bindVertexArray(gpuMesh.vao);
-      if (gpuMesh.indexCount > 0) {
-        gl.depthMask(true);
-        gl.drawElements(gl.TRIANGLES, gpuMesh.indexCount, gl.UNSIGNED_INT, 0);
-      }
-      gl.bindVertexArray(null);
+    gl.bindVertexArray(gpuMesh.vao);
+    if (gpuMesh.indexCount > 0) {
+      gl.depthMask(true);
+      gl.drawElements(gl.TRIANGLES, gpuMesh.indexCount, gl.UNSIGNED_INT, 0);
     }
+    gl.bindVertexArray(null);
 
     if (statsEl) {
       const vtx = gpuMesh.vertexCount;

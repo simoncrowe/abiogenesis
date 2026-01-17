@@ -4,9 +4,7 @@ const simInitSelect = document.querySelector("#simInit");
 const simParamsEl = document.querySelector("#simParams");
 const volumeThresholdInput = document.querySelector("#volumeThreshold");
 const viewRadiusInput = document.querySelector("#viewRadius");
-const transparencyModeSelect = document.querySelector("#transparencyMode");
 const meshOpacityInput = document.querySelector("#meshOpacity");
-const oitWeightInput = document.querySelector("#oitWeight");
 const gradMagGainInput = document.querySelector("#gradMagGain");
 const restartBtn = document.querySelector("#restart");
 
@@ -37,7 +35,6 @@ function setNumberInputValue(input, value, step) {
 export function createHudController({
   onRestart,
   getWorker,
-  oitSupported,
 }) {
   if (typeof onRestart !== "function") throw new Error("createHudController requires onRestart");
 
@@ -48,9 +45,6 @@ export function createHudController({
 
   const meshColor = [0.15, 0.65, 0.9, 0.75];
   let meshOpacity = meshColor[3];
-
-  let transparencyMode = "alpha";
-  let oitWeight = 0.03;
 
   const simStrategies = {
     gray_scott: {
@@ -364,27 +358,6 @@ export function createHudController({
   if (viewRadiusInput) viewRadiusInput.value = viewRadius.toFixed(2);
   if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
   if (meshOpacityInput) meshOpacityInput.value = meshOpacity.toFixed(2);
-  if (oitWeightInput) oitWeightInput.value = oitWeight.toFixed(3);
-
-  if (transparencyModeSelect) {
-    transparencyModeSelect.value = transparencyMode;
-  }
-
-  const updateTransparencyUi = () => {
-    const oitActive = (transparencyMode === "oit") && !!oitSupported;
-    if (oitWeightInput) oitWeightInput.disabled = !oitActive;
-    if (!oitSupported && transparencyMode === "oit") {
-      transparencyMode = "alpha";
-      if (transparencyModeSelect) transparencyModeSelect.value = transparencyMode;
-    }
-  };
-
-  transparencyModeSelect?.addEventListener("change", () => {
-    transparencyMode = String(transparencyModeSelect.value || "alpha");
-    updateTransparencyUi();
-  });
-
-  updateTransparencyUi();
 
   volumeThresholdInput?.addEventListener("input", () => {
     volumeThreshold = parseClampedFloat(volumeThresholdInput.value, volumeThreshold, 0, 1);
@@ -412,13 +385,6 @@ export function createHudController({
     meshOpacityInput.value = meshOpacity.toFixed(2);
   });
 
-  oitWeightInput?.addEventListener("input", () => {
-    oitWeight = parseClampedFloat(oitWeightInput.value, oitWeight, 0, 0.2);
-  });
-  oitWeightInput?.addEventListener("change", () => {
-    oitWeight = parseClampedFloat(oitWeightInput.value, oitWeight, 0, 0.2);
-    oitWeightInput.value = oitWeight.toFixed(3);
-  });
 
   gradMagGainInput?.addEventListener("input", () => {
     gradMagGain = parseClampedFloat(gradMagGainInput.value, gradMagGain, 0, 50);
@@ -456,13 +422,6 @@ export function createHudController({
       };
     },
 
-    getTransparencyMode() {
-      return transparencyMode;
-    },
-
-    getOitWeight() {
-      return oitWeight;
-    },
 
     getSimConfig() {
       return structuredClone(simConfig);
