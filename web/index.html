@@ -14,38 +14,105 @@
       <details id="controlsPanel">
         <summary>☰ Settings</summary>
         <div id="controls">
-          <div class="settingsHeading">Simulation settings</div>
-          <label>
-            Simulation strategy
-            <select id="simStrategy"></select>
-          </label>
-          <label>
-            Starting Seed
-            <input id="seed" type="number" step="1" />
-          </label>
-          <label>
-            Initialization
-            <select id="simInit"></select>
-          </label>
-          <div id="simParams"></div>
-          <div class="settingsHeading">Display settings</div>
-          <label>
-            Volume threshold
-            <input id="volumeThreshold" type="number" step="0.01" min="0" max="1" value="0.50" />
-          </label>
-          <label>
-            View radius
-            <input id="viewRadius" type="number" step="0.01" min="0.05" max="5" value="0.5" />
-          </label>
-          <label>
-            Opacity
-            <input id="meshOpacity" type="number" step="0.01" min="0" max="1" value="0.75" />
-          </label>
-          <label>
-            Gradient shading gain
-            <input id="gradMagGain" type="number" step="0.5" min="0" max="50" value="18" />
-          </label>
-          <button id="restart" type="button">Restart</button>
+          <input id="tabSim" type="radio" name="settingsTab" checked />
+          <input id="tabDisplay" type="radio" name="settingsTab" />
+          <input id="tabAo" type="radio" name="settingsTab" />
+          <input id="tabSss" type="radio" name="settingsTab" />
+
+          <div class="menuTabs">
+            <label for="tabSim">Simulation</label>
+            <label for="tabDisplay">General display</label>
+            <label for="tabAo">Ambient occlusion</label>
+            <label for="tabSss">Subsurface scattering</label>
+          </div>
+
+          <div class="menuPanels">
+            <section id="panelSim" class="panel">
+              <label>
+                Simulation strategy
+                <select id="simStrategy"></select>
+              </label>
+              <label>
+                Starting Seed
+                <input id="seed" type="number" step="1" />
+              </label>
+              <label>
+                Initialization
+                <select id="simInit"></select>
+              </label>
+              <div id="simParams"></div>
+              <button id="restart" type="button">Restart</button>
+            </section>
+
+            <section id="panelDisplay" class="panel">
+              <label>
+                Volume threshold
+                <input id="volumeThreshold" type="number" step="0.01" min="0" max="1" value="0.50" />
+              </label>
+              <label>
+                View radius
+                <input id="viewRadius" type="number" step="0.01" min="0.05" max="5" value="0.5" />
+              </label>
+              <label>
+                Opacity
+                <input id="meshOpacity" type="number" step="0.01" min="0" max="1" value="0.75" />
+              </label>
+              <label>
+                Light intensity
+                <input id="lightIntensity" type="number" step="0.05" min="0" max="3" value="1" />
+              </label>
+              <label>
+                Gradient shading gain
+                <input id="gradMagGain" type="number" step="0.5" min="0" max="50" value="18" />
+              </label>
+            </section>
+
+            <section id="panelAo" class="panel">
+              <label>
+                Ambient occlusion
+                <input id="aoEnabled" type="checkbox" />
+              </label>
+              <label>
+                AO intensity
+                <input id="aoIntensity" type="number" step="0.05" min="0" max="3" value="1.5" />
+              </label>
+              <label>
+                AO radius (px)
+                <input id="aoRadius" type="number" step="1" min="1" max="64" value="16" />
+              </label>
+              <label>
+                AO samples
+                <input id="aoSamples" type="number" step="1" min="4" max="16" value="8" />
+              </label>
+              <label>
+                AO softness
+                <input id="aoSoftness" type="number" step="1" min="0" max="4" value="3" />
+              </label>
+              <label>
+                AO bias
+                <input id="aoBias" type="number" step="0.0005" min="0" max="0.02" value="0.002" />
+              </label>
+            </section>
+
+            <section id="panelSss" class="panel">
+              <label>
+                Subsurface scattering
+                <input id="sssEnabled" type="checkbox" />
+              </label>
+              <label>
+                SSS wrap
+                <input id="sssWrap" type="number" step="0.02" min="0" max="1" value="0.4" />
+              </label>
+              <label>
+                SSS backscatter
+                <input id="sssBackStrength" type="number" step="0.05" min="0" max="2" value="0.4" />
+              </label>
+              <label>
+                SSS back power
+                <input id="sssBackPower" type="number" step="0.1" min="0.1" max="8" value="2" />
+              </label>
+            </section>
+          </div>
         </div>
       </details>
       <p id="stats"></p>

@@ -5,6 +5,17 @@ const simParamsEl = document.querySelector("#simParams");
 const volumeThresholdInput = document.querySelector("#volumeThreshold");
 const viewRadiusInput = document.querySelector("#viewRadius");
 const meshOpacityInput = document.querySelector("#meshOpacity");
+const lightIntensityInput = document.querySelector("#lightIntensity");
+const sssEnabledInput = document.querySelector("#sssEnabled");
+const sssWrapInput = document.querySelector("#sssWrap");
+const sssBackStrengthInput = document.querySelector("#sssBackStrength");
+const sssBackPowerInput = document.querySelector("#sssBackPower");
+const aoEnabledInput = document.querySelector("#aoEnabled");
+const aoIntensityInput = document.querySelector("#aoIntensity");
+const aoRadiusInput = document.querySelector("#aoRadius");
+const aoSamplesInput = document.querySelector("#aoSamples");
+const aoSoftnessInput = document.querySelector("#aoSoftness");
+const aoBiasInput = document.querySelector("#aoBias");
 const gradMagGainInput = document.querySelector("#gradMagGain");
 const restartBtn = document.querySelector("#restart");
 
@@ -45,6 +56,21 @@ export function createHudController({
 
   const meshColor = [0.15, 0.65, 0.9, 0.75];
   let meshOpacity = meshColor[3];
+
+  let lightIntensity = 1.0;
+
+  let sssEnabled = false;
+  let sssWrap = 0.4;
+  let sssBackStrength = 0.4;
+  let sssBackPower = 2.0;
+
+  let aoEnabled = false;
+  let aoIntensity = 1.5;
+  let aoRadiusPx = 16.0;
+  let aoSamples = 8;
+  let aoSoftness = 3;
+  let aoBias = 0.002;
+
 
   const simStrategies = {
     gray_scott: {
@@ -124,6 +150,17 @@ export function createHudController({
       ],
       seedings: [
         {
+          id: "perlin",
+          name: "Perlin noise",
+          config: {
+            type: "perlin",
+            frequency: 6.0,
+            octaves: 4,
+            v_bias: 0.0,
+            v_amp: 1.0,
+          },
+        },
+        {
           id: "classic",
           name: "Classic (spheres + noise)",
           config: {
@@ -134,17 +171,6 @@ export function createHudController({
             sphereRadiusJitter01: 0.4,
             u: 0.5,
             v: 0.25,
-          },
-        },
-        {
-          id: "perlin",
-          name: "Perlin noise",
-          config: {
-            type: "perlin",
-            frequency: 6.0,
-            octaves: 4,
-            v_bias: 0.0,
-            v_amp: 1.0,
           },
         },
       ],
@@ -358,6 +384,48 @@ export function createHudController({
   if (viewRadiusInput) viewRadiusInput.value = viewRadius.toFixed(2);
   if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
   if (meshOpacityInput) meshOpacityInput.value = meshOpacity.toFixed(2);
+  if (lightIntensityInput) setNumberInputValue(lightIntensityInput, lightIntensity, lightIntensityInput.step);
+  if (sssEnabledInput) sssEnabledInput.checked = sssEnabled;
+  if (sssWrapInput) setNumberInputValue(sssWrapInput, sssWrap, sssWrapInput.step);
+  if (sssBackStrengthInput) setNumberInputValue(sssBackStrengthInput, sssBackStrength, sssBackStrengthInput.step);
+  if (sssBackPowerInput) setNumberInputValue(sssBackPowerInput, sssBackPower, sssBackPowerInput.step);
+
+  const updateSssUi = () => {
+    const enabled = sssEnabled;
+    if (sssWrapInput) sssWrapInput.disabled = !enabled;
+    if (sssBackStrengthInput) sssBackStrengthInput.disabled = !enabled;
+    if (sssBackPowerInput) sssBackPowerInput.disabled = !enabled;
+  };
+
+  sssEnabledInput?.addEventListener("change", () => {
+    sssEnabled = sssEnabledInput.checked === true;
+    updateSssUi();
+  });
+
+  updateSssUi();
+
+  if (aoEnabledInput) aoEnabledInput.checked = aoEnabled;
+  if (aoIntensityInput) setNumberInputValue(aoIntensityInput, aoIntensity, aoIntensityInput.step);
+  if (aoRadiusInput) setNumberInputValue(aoRadiusInput, aoRadiusPx, aoRadiusInput.step);
+  if (aoSamplesInput) setNumberInputValue(aoSamplesInput, aoSamples, aoSamplesInput.step);
+  if (aoSoftnessInput) setNumberInputValue(aoSoftnessInput, aoSoftness, aoSoftnessInput.step);
+  if (aoBiasInput) setNumberInputValue(aoBiasInput, aoBias, aoBiasInput.step);
+
+  const updateAoUi = () => {
+    const enabled = aoEnabled;
+    if (aoIntensityInput) aoIntensityInput.disabled = !enabled;
+    if (aoRadiusInput) aoRadiusInput.disabled = !enabled;
+    if (aoSamplesInput) aoSamplesInput.disabled = !enabled;
+    if (aoSoftnessInput) aoSoftnessInput.disabled = !enabled;
+    if (aoBiasInput) aoBiasInput.disabled = !enabled;
+  };
+
+  aoEnabledInput?.addEventListener("change", () => {
+    aoEnabled = aoEnabledInput.checked === true;
+    updateAoUi();
+  });
+
+  updateAoUi();
 
   volumeThresholdInput?.addEventListener("input", () => {
     volumeThreshold = parseClampedFloat(volumeThresholdInput.value, volumeThreshold, 0, 1);
@@ -385,6 +453,77 @@ export function createHudController({
     meshOpacityInput.value = meshOpacity.toFixed(2);
   });
 
+  lightIntensityInput?.addEventListener("input", () => {
+    lightIntensity = parseClampedFloat(lightIntensityInput.value, lightIntensity, 0, 3);
+  });
+  lightIntensityInput?.addEventListener("change", () => {
+    lightIntensity = parseClampedFloat(lightIntensityInput.value, lightIntensity, 0, 3);
+    setNumberInputValue(lightIntensityInput, lightIntensity, lightIntensityInput.step);
+  });
+
+  sssWrapInput?.addEventListener("input", () => {
+    sssWrap = parseClampedFloat(sssWrapInput.value, sssWrap, 0, 1);
+  });
+  sssWrapInput?.addEventListener("change", () => {
+    sssWrap = parseClampedFloat(sssWrapInput.value, sssWrap, 0, 1);
+    setNumberInputValue(sssWrapInput, sssWrap, sssWrapInput.step);
+  });
+
+  sssBackStrengthInput?.addEventListener("input", () => {
+    sssBackStrength = parseClampedFloat(sssBackStrengthInput.value, sssBackStrength, 0, 2);
+  });
+  sssBackStrengthInput?.addEventListener("change", () => {
+    sssBackStrength = parseClampedFloat(sssBackStrengthInput.value, sssBackStrength, 0, 2);
+    setNumberInputValue(sssBackStrengthInput, sssBackStrength, sssBackStrengthInput.step);
+  });
+
+  sssBackPowerInput?.addEventListener("input", () => {
+    sssBackPower = parseClampedFloat(sssBackPowerInput.value, sssBackPower, 0.1, 8);
+  });
+  sssBackPowerInput?.addEventListener("change", () => {
+    sssBackPower = parseClampedFloat(sssBackPowerInput.value, sssBackPower, 0.1, 8);
+    setNumberInputValue(sssBackPowerInput, sssBackPower, sssBackPowerInput.step);
+  });
+
+  aoIntensityInput?.addEventListener("input", () => {
+    aoIntensity = parseClampedFloat(aoIntensityInput.value, aoIntensity, 0, 3);
+  });
+  aoIntensityInput?.addEventListener("change", () => {
+    aoIntensity = parseClampedFloat(aoIntensityInput.value, aoIntensity, 0, 3);
+    setNumberInputValue(aoIntensityInput, aoIntensity, aoIntensityInput.step);
+  });
+
+  aoRadiusInput?.addEventListener("input", () => {
+    aoRadiusPx = parseClampedFloat(aoRadiusInput.value, aoRadiusPx, 1, 64);
+  });
+  aoRadiusInput?.addEventListener("change", () => {
+    aoRadiusPx = parseClampedFloat(aoRadiusInput.value, aoRadiusPx, 1, 64);
+    setNumberInputValue(aoRadiusInput, aoRadiusPx, aoRadiusInput.step);
+  });
+
+  aoSamplesInput?.addEventListener("input", () => {
+    aoSamples = Math.trunc(parseClampedFloat(aoSamplesInput.value, aoSamples, 4, 16));
+  });
+  aoSamplesInput?.addEventListener("change", () => {
+    aoSamples = Math.trunc(parseClampedFloat(aoSamplesInput.value, aoSamples, 4, 16));
+    setNumberInputValue(aoSamplesInput, aoSamples, aoSamplesInput.step);
+  });
+
+  aoSoftnessInput?.addEventListener("input", () => {
+    aoSoftness = Math.trunc(parseClampedFloat(aoSoftnessInput.value, aoSoftness, 0, 4));
+  });
+  aoSoftnessInput?.addEventListener("change", () => {
+    aoSoftness = Math.trunc(parseClampedFloat(aoSoftnessInput.value, aoSoftness, 0, 4));
+    setNumberInputValue(aoSoftnessInput, aoSoftness, aoSoftnessInput.step);
+  });
+
+  aoBiasInput?.addEventListener("input", () => {
+    aoBias = parseClampedFloat(aoBiasInput.value, aoBias, 0, 0.02);
+  });
+  aoBiasInput?.addEventListener("change", () => {
+    aoBias = parseClampedFloat(aoBiasInput.value, aoBias, 0, 0.02);
+    setNumberInputValue(aoBiasInput, aoBias, aoBiasInput.step);
+  });
 
   gradMagGainInput?.addEventListener("input", () => {
     gradMagGain = parseClampedFloat(gradMagGainInput.value, gradMagGain, 0, 50);
@@ -419,6 +558,17 @@ export function createHudController({
         iso: volumeThreshold,
         color: meshColor,
         gradMagGain,
+        lightIntensity,
+        sssEnabled,
+        sssWrap,
+        sssBackStrength,
+        sssBackPower,
+        aoEnabled,
+        aoIntensity,
+        aoRadiusPx,
+        aoSamples,
+        aoSoftness,
+        aoBias,
       };
     },
 
