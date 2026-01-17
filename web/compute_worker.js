@@ -575,8 +575,15 @@ async function restartSimulation() {
     params.set_d_i(Number(simConfig.params?.decayI ?? 0.005));
     params.set_d_f(Number(simConfig.params?.decayF ?? 0.0));
 
+    params.set_eta_scale(Number(simConfig.params?.etaScale ?? 0.25));
+
     params.set_aliveness_alpha(Number(simConfig.params?.alivenessAlpha ?? 0.25));
     params.set_aliveness_gain(Number(simConfig.params?.alivenessGain ?? 0.05));
+
+    // Optional stability knob (defaults to 1 in Rust).
+    if (typeof params.set_substeps === "function") {
+      params.set_substeps(toU32(simConfig.params?.substeps, 1));
+    }
 
     sim = new StochasticRdmeSimulation(dims, dims, dims, currentSeed, params);
     sim.set_dt(Number(simConfig.dt ?? 0.05));

@@ -67,10 +67,6 @@ impl ScalarFieldMesher {
         }
     }
 
-    fn chunk_index(&self, cx: usize, cy: usize, cz: usize) -> usize {
-        cx + self.chunk_nx * (cy + self.chunk_ny * cz)
-    }
-
     fn reset_chunk_ranges(chunk_v_min: &mut [f32], chunk_v_max: &mut [f32]) {
         chunk_v_min.fill(f32::INFINITY);
         chunk_v_max.fill(f32::NEG_INFINITY);

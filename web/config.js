@@ -183,6 +183,28 @@ export function createHudController({
         { key: "dims", path: ["dims"], label: "Grid size (dims)", min: 16, max: 256, step: 1, defaultValue: 128, requiresRestart: true },
         { key: "dt", path: ["dt"], label: "Simulation timestep (dt)", min: 0.001, max: 1, step: 0.001, defaultValue: 0.05, requiresRestart: false },
         { key: "ticksPerSecond", path: ["ticksPerSecond"], label: "Publish rate (ticks/s)", min: 1, max: 60, step: 1, defaultValue: 5, requiresRestart: false },
+
+        { key: "df", path: ["params", "df"], label: "Diffusion F (df)", min: 0, max: 2, step: 0.001, defaultValue: 0.2, requiresRestart: true },
+        { key: "da", path: ["params", "da"], label: "Diffusion A (da)", min: 0, max: 2, step: 0.001, defaultValue: 0.05, requiresRestart: true },
+        { key: "di", path: ["params", "di"], label: "Diffusion I (di)", min: 0, max: 2, step: 0.001, defaultValue: 0.02, requiresRestart: true },
+
+        { key: "k1", path: ["params", "k1"], label: "Rate k1 (A+F->2A)", min: 0, max: 0.1, step: 0.00001, defaultValue: 0.002, requiresRestart: true },
+        { key: "k2", path: ["params", "k2"], label: "Rate k2 (A->A+I)", min: 0, max: 0.5, step: 0.0001, defaultValue: 0.02, requiresRestart: true },
+        { key: "k3", path: ["params", "k3"], label: "Rate k3 (A+I->I)", min: 0, max: 0.1, step: 0.00001, defaultValue: 0.001, requiresRestart: true },
+
+        { key: "feedBase", path: ["params", "feedBase"], label: "Feed base", min: 0, max: 10, step: 0.001, defaultValue: 2.0, requiresRestart: true },
+        { key: "feedNoiseAmp", path: ["params", "feedNoiseAmp"], label: "Feed noise amp", min: 0, max: 2, step: 0.001, defaultValue: 0.35, requiresRestart: true },
+        { key: "feedNoiseScale", path: ["params", "feedNoiseScale"], label: "Feed noise scale", min: 1, max: 64, step: 1, defaultValue: 8, requiresRestart: true },
+
+        { key: "decayA", path: ["params", "decayA"], label: "Decay A", min: 0, max: 1, step: 0.0001, defaultValue: 0.01, requiresRestart: true },
+        { key: "decayI", path: ["params", "decayI"], label: "Decay I", min: 0, max: 1, step: 0.0001, defaultValue: 0.005, requiresRestart: true },
+        { key: "decayF", path: ["params", "decayF"], label: "Decay F", min: 0, max: 1, step: 0.0001, defaultValue: 0.0, requiresRestart: true },
+
+        { key: "etaScale", path: ["params", "etaScale"], label: "Noise scale (eta)", min: 0, max: 2, step: 0.001, defaultValue: 0.25, requiresRestart: true },
+        { key: "substeps", path: ["params", "substeps"], label: "Substeps", min: 1, max: 8, step: 1, defaultValue: 1, requiresRestart: true },
+
+        { key: "alivenessAlpha", path: ["params", "alivenessAlpha"], label: "Aliveness alpha", min: 0, max: 2, step: 0.001, defaultValue: 0.25, requiresRestart: true },
+        { key: "alivenessGain", path: ["params", "alivenessGain"], label: "Aliveness gain", min: 0.00001, max: 1, step: 0.00001, defaultValue: 0.05, requiresRestart: true },
       ],
       seedings: [
         {
@@ -357,6 +379,16 @@ export function createHudController({
       const nextId = simStrategySelect.value;
       const prevDims = simConfig.dims;
       resetSimConfigForStrategy(nextId);
+
+      // Strategy-specific default isosurface threshold.
+      // (User can still override via the "volume threshold" slider afterward.)
+      if (nextId === "stochastic_rdme") {
+        volumeThreshold = 0.10;
+      } else if (nextId === "gray_scott") {
+        volumeThreshold = 0.25;
+      }
+      if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);
+
       renderSimInitSelect();
       renderSimParams();
 

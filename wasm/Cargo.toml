@@ -13,5 +13,5 @@ js-sys = "0.3"
 
 # In-WASM parallelism (requires crossOriginIsolated + SharedArrayBuffer in the browser).
 rayon = "1.10"
-wasm-bindgen-rayon = "1.2"
+wasm-bindgen-rayon = { version = "1.2", features = ["nightly"] }
 

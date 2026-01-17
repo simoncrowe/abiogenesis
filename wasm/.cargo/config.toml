@@ -1,5 +1,8 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
+  # NOTE: `+atomics` is required for wasm threads, but rustc warns that it is
+  # unstable as a `-C target-feature` knob. This is expected; it is controlled
+  # by the toolchain/target and is required by wasm-bindgen-rayon.
   "-C",
   "target-feature=+atomics,+bulk-memory,+mutable-globals",
 
