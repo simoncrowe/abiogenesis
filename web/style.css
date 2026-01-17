@@ -57,19 +57,60 @@ body {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  gap: 10px;
+}
+
+#controls input[type="radio"] {
+  display: none;
+}
+
+.menuTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.menuTabs label {
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  user-select: none;
+}
+
+#tabSim:checked ~ .menuTabs label[for="tabSim"],
+#tabDisplay:checked ~ .menuTabs label[for="tabDisplay"],
+#tabAo:checked ~ .menuTabs label[for="tabAo"],
+#tabSss:checked ~ .menuTabs label[for="tabSss"] {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.menuPanels {
+  display: block;
+}
+
+.menuPanels .panel {
+  display: none;
+  flex-direction: column;
   gap: 8px;
 }
 
-/* Section headings inside Settings */
-.settingsHeading {
-  display: block;
-  margin-top: 6px;
-  padding: 3px 6px 3px 10px;
-  border-left: 3px solid rgba(255, 255, 255, 0.25);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.9);
-  letter-spacing: 0.02em;
+#tabSim:checked ~ .menuPanels #panelSim {
+  display: flex;
+}
+
+#tabDisplay:checked ~ .menuPanels #panelDisplay {
+  display: flex;
+}
+
+#tabAo:checked ~ .menuPanels #panelAo {
+  display: flex;
+}
+
+#tabSss:checked ~ .menuPanels #panelSss {
+  display: flex;
 }
 
 #controls label {
@@ -77,6 +118,10 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.menuPanels button {
+  align-self: flex-start;
 }
 
 #simParams {
