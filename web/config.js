@@ -1,6 +1,7 @@
 const seedInput = document.querySelector("#seed");
 const simStrategySelect = document.querySelector("#simStrategy");
 const simInitSelect = document.querySelector("#simInit");
+const simExportSelect = document.querySelector("#simExport");
 const simParamsEl = document.querySelector("#simParams");
 const volumeThresholdInput = document.querySelector("#volumeThreshold");
 const viewRadiusInput = document.querySelector("#viewRadius");
@@ -72,10 +73,18 @@ export function createHudController({
   let aoBias = 0.002;
 
 
+  const simExportModes = {
+    // Shared IDs; not every strategy will expose all.
+    phase: { id: "phase", name: "Phase field" },
+    phase_tanh: { id: "phase_tanh", name: "Phase field (tanh)" },
+    membranes: { id: "membranes", name: "Active membranes (|mu|)" },
+    energy: { id: "energy", name: "Energy density" },
+  };
+
   const simStrategies = {
     gray_scott: {
       id: "gray_scott",
-      name: "Gray–Scott reaction–diffusion",
+      name: "Gray-Scott reaction-diffusion",
       params: [
         {
           key: "dims",
@@ -238,6 +247,70 @@ export function createHudController({
         },
       ],
     },
+
+    cahn_hilliard: {
+      id: "cahn_hilliard",
+      name: "Cahn-Hilliard phase field",
+      exportModes: [
+        simExportModes.phase_tanh,
+        simExportModes.phase,
+        simExportModes.membranes,
+        simExportModes.energy,
+      ],
+      params: [
+        { key: "dims", path: ["dims"], label: "Grid size (dims)", min: 16, max: 256, step: 1, defaultValue: 128, requiresRestart: true },
+        { key: "dt", path: ["dt"], label: "Simulation timestep (dt)", min: 0.0001, max: 0.2, step: 0.0001, defaultValue: 0.002, requiresRestart: false },
+        { key: "ticksPerSecond", path: ["ticksPerSecond"], label: "Publish rate (ticks/s)", min: 1, max: 60, step: 1, defaultValue: 5, requiresRestart: false },
+
+        { key: "a", path: ["params", "a"], label: "Double-well strength (A)", min: 0, max: 5, step: 0.001, defaultValue: 1.0, requiresRestart: true },
+        { key: "kappa", path: ["params", "kappa"], label: "Interface width (kappa)", min: 0, max: 5, step: 0.001, defaultValue: 0.6, requiresRestart: true },
+        { key: "m", path: ["params", "m"], label: "Mobility (M)", min: 0, max: 5, step: 0.001, defaultValue: 0.2, requiresRestart: true },
+        { key: "substeps", path: ["params", "substeps"], label: "Substeps", min: 1, max: 16, step: 1, defaultValue: 2, requiresRestart: true },
+        { key: "passMode", path: ["params", "passMode"], label: "Passes (2=full,1=fast)", min: 1, max: 2, step: 1, defaultValue: 1, requiresRestart: true },
+        { key: "approxMode", path: ["params", "approxMode"], label: "2-pass approx (0/1)", min: 0, max: 1, step: 1, defaultValue: 0, requiresRestart: true },
+
+        { key: "phiMean", path: ["params", "phiMean"], label: "Mean phi", min: -1, max: 1, step: 0.001, defaultValue: -0.45, requiresRestart: true },
+        { key: "noiseAmp", path: ["params", "noiseAmp"], label: "Init noise amp", min: 0, max: 0.2, step: 0.001, defaultValue: 0.02, requiresRestart: true },
+      ],
+      seedings: [
+        {
+          id: "spinodal",
+          name: "Spinodal (noise)",
+          config: {
+            type: "spinodal",
+            phiMean: 0.0,
+            noiseAmp: 0.02,
+          },
+        },
+        {
+          id: "droplets",
+          name: "Droplets (biased)",
+          config: {
+            type: "droplets",
+            phiMean: -0.45,
+            noiseAmp: 0.02,
+          },
+        },
+        {
+          id: "membranes",
+          name: "Active membranes",
+          config: {
+            type: "membranes",
+            phiMean: 0.0,
+            noiseAmp: 0.02,
+          },
+        },
+        {
+          id: "energy",
+          name: "Energy density",
+          config: {
+            type: "energy",
+            phiMean: -0.45,
+            noiseAmp: 0.02,
+          },
+        },
+      ],
+    },
   };
 
   const simConfig = {
@@ -247,6 +320,7 @@ export function createHudController({
     dt: 0.1,
     ticksPerSecond: 5,
     seeding: simStrategies.gray_scott.seedings[0].config,
+    exportMode: null,
   };
 
   function resetSimConfigForStrategy(strategyId) {
@@ -269,6 +343,7 @@ export function createHudController({
     }
 
     simConfig.seeding = strategy.seedings?.[0]?.config ?? simConfig.seeding;
+    simConfig.exportMode = strategy.exportModes?.[0]?.id ?? null;
   }
 
   function getSimConfigValue(path) {
@@ -374,6 +449,33 @@ export function createHudController({
     };
   }
 
+  function renderSimExportSelect() {
+    if (!simExportSelect) return;
+
+    const strategy = simStrategies[simConfig.strategyId];
+    simExportSelect.textContent = "";
+
+    for (const m of strategy.exportModes ?? []) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.name;
+      simExportSelect.appendChild(opt);
+    }
+
+    if ((strategy.exportModes ?? []).length === 0) {
+      simExportSelect.disabled = true;
+      return;
+    }
+
+    simExportSelect.disabled = false;
+    simExportSelect.value = simConfig.exportMode ?? strategy.exportModes?.[0]?.id;
+
+    simExportSelect.onchange = () => {
+      simConfig.exportMode = simExportSelect.value;
+      getWorker()?.postMessage({ type: "sim_config", config: { exportMode: simConfig.exportMode } });
+    };
+  }
+
   function renderSimStrategySelect() {
     if (!simStrategySelect) return;
 
@@ -399,10 +501,23 @@ export function createHudController({
         volumeThreshold = 0.10;
       } else if (nextId === "gray_scott") {
         volumeThreshold = 0.25;
+      } else if (nextId === "cahn_hilliard") {
+        // CH exports a phase boundary centered at v=0.5.
+        volumeThreshold = 0.50;
+
+        // Smaller view radius tends to work better with CH droplets.
+        viewRadius = 0.35;
+        if (viewRadiusInput) viewRadiusInput.value = viewRadius.toFixed(2);
+
+        // CH interface gradients are typically sharper than Gray-Scott.
+        // Use a lower default gain so the ramp doesn't instantly saturate.
+        gradMagGain = 1.0;
+        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
       }
       if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);
 
       renderSimInitSelect();
+      renderSimExportSelect();
       renderSimParams();
 
       if (simConfig.dims !== prevDims) {
@@ -423,6 +538,7 @@ export function createHudController({
   // Initial UI values.
   renderSimStrategySelect();
   renderSimInitSelect();
+  renderSimExportSelect();
   renderSimParams();
 
   if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);

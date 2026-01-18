@@ -1,23 +1,26 @@
-# architecture/05-cahn-hilliard-phase-field.md
+# architecture/10-cahn-hilliard-phase-field.md
+# architecture/10-cahn-hilliard-phase-field.md
 
 ## Purpose
 
-Add a Cahn–Hilliard (CH) phase-field simulation backend to the existing PoC to provide
-compartmentalization / droplet / membrane-like dynamics on an n^3 lattice, suitable for 3D isosurface
-extraction (marching tetrahedra) and efficient parallel stepping (Rust + Rayon, WASM threads).
+Add a Cahn-Hilliard (CH) phase-field simulation backend to the existing PoC to provide
+compartmentalization / droplet / membrane-like dynamics on an `n^3` lattice, suitable for 3D isosurface
+extraction (marching tetrahedra) and efficient parallel stepping (Rust + Rayon, wasm threads).
 
-CH fills a niche not covered by Gray–Scott or RDME:
+CH fills a niche not covered by Gray-Scott or the current stochastic RDME/CLE-style simulation:
 - spontaneous phase separation (droplets, bicontinuous phases)
 - membrane-like interfaces (large gradients at boundaries)
 - protocell-like compartments when later coupled to chemistry
 
 Primary output: a single scalar field per voxel (phi or derived) exported to JS as f32.
 
+In this codebase, that exported scalar should be presented as `v` (to match `ScalarFieldMesher` and the existing JS worker pipeline). Practically, `v` is expected to be in [0,1], so a simple mapping like `v = (phi + 1)/2` keeps the UI slider behavior consistent.
+
 ---
 
 ## Overview
 
-Cahn–Hilliard is a conserved-order-parameter phase separation model:
+Cahn-Hilliard is a conserved-order-parameter phase separation model:
 
 - phi(x) is a scalar field (e.g., "composition" / "oil-water fraction")
 - phi evolves to minimize a free energy, subject to conservation of total phi
@@ -40,67 +43,64 @@ In discrete form this becomes a stencil-based update composed of local nonlinear
 
 ## Simulation mode integration
 
-Add a backend variant compatible with the existing simulation trait/interface:
+The current codebase does not have a unified Rust-side `SimulationMode` enum/trait.
+Instead, the JS worker chooses a strategy via `simConfig.strategyId` (e.g. `"gray_scott"`, `"stochastic_rdme"`) and instantiates a specific wasm-exported simulation type.
 
-enum SimulationMode {
-  GrayScott,
-  RDME,
-  CahnHilliard,
-}
+Practical integration pattern (match existing sims):
+- Add a new strategy id: `"cahn_hilliard"`.
+- Add a wasm-exported params type and simulation type:
+  - `CahnHilliardParams`
+  - `CahnHilliardSimulation`
+- Match the existing JS contract used by `web/compute_worker.js` + `ScalarFieldMesher`:
+  - `step(steps: usize)`
+  - `set_dt(dt: f32)`
+  - `v_ptr() -> u32` / `v_len() -> usize` (the mesher always consumes `v`)
+  - `recompute_chunk_ranges_from_v()` + `chunk_v_min_ptr()` / `chunk_v_max_ptr()` / `chunk_v_len()` for iso-culling
 
-Shared responsibilities:
-- lattice dimensions, indexing helpers, periodic boundary support
-- stepping loop / dt
-- WASM exports for scalar fields (typed array view into wasm memory)
-- marching tetrahedra consumes an "aliveness" scalar field
-
-CH backend owns:
-- phi buffers (double-buffer)
-- optional mu buffer (or compute on the fly)
-- parameters (M, kappa, A, dt, etc.)
-- initialization and stepping implementation
+Notes:
+- In the current pipeline, "aliveness" is just the exported `v` scalar field.
+- Chunk min/max are recomputed on publish (keyframes), not necessarily every simulation step.
 
 ---
 
 ## Lattice, indexing, boundaries
 
-- Domain: N x N x N, periodic boundaries recommended
-- Target: N = 128 initially
+- Domain: `nx x ny x nz`, periodic boundaries (matches existing sims).
+- Target: start at 128^3, but expect the UI to default closer to 192^3.
 
-Indexing:
-- i = x + N*(y + N*z)
+Indexing (match existing `idx(nx, ny, x, y, z)` helper):
+- `i = x + nx * (y + ny * z)`
 
 Neighbors for Laplacian:
-- 6-neighbor stencil (recommended initial implementation):
-  Laplacian(phi)[i] = sum(phi[neighbors]) - 6*phi[i]
-  (scaled by 1/h^2 if using physical spacing h != 1)
+- 6-neighbor stencil (matches existing gather-style diffusion kernels):
+  - `L(phi)[i] = phi[x-1] + phi[x+1] + phi[y-1] + phi[y+1] + phi[z-1] + phi[z+1] - 6*phi[i]`
 
-Periodic wrap:
-- x-1 wraps to N-1, etc.
+Implementation detail (match performance style in `wasm/src/gray_scott.rs` and `wasm/src/rdme.rs`):
+- Precompute wrapped index tables once:
+  - `x_minus[x]`, `x_plus[x]`, etc.
+- Iterate in `z`-slice `par_chunks_mut(nxy)` form to avoid per-voxel div/mod in hot loops.
 
 ---
 
 ## State and buffers
 
-Core field:
-- phi[i] : f32 (or f64 if needed), conserved scalar
+Core state:
+- `phi[i]: f32` conserved order parameter.
 
-Buffers:
-- phi0[N^3] read
-- phi1[N^3] write
+Buffers (match existing "double-buffered arrays" pattern):
+- `phi0[n]` read
+- `phi1[n]` write
 
-Optional scratch buffers (choose one approach):
-A) On-the-fly (minimal memory, more compute):
-- compute Laplacian(phi) and Laplacian(mu) within a single kernel without storing mu
+Scratch:
+- `mu[n]` scratch (single buffer).
 
-B) Two-pass with scratch (more memory, simpler to validate):
-- mu[N^3] scratch (or mu0/mu1 if double-buffering mu)
-- pass 1: compute mu from phi0
-- pass 2: compute phi1 using Laplacian(mu)
+Why two-pass first (practical):
+- Existing sims already accept extra buffers when it keeps kernels simple.
+- Two-pass makes it easy to validate `mu` and `phi` separately and keeps the inner loops clean.
 
-Initial recommendation:
-- Implement two-pass first (mu scratch) for clarity and correctness
-- Optimize to one-pass later if needed
+Memory note:
+- 3 buffers * `n` * 4 bytes = ~56MB at 192^3 (7.1M voxels).
+- That is within reach for native and often for wasm, but is worth keeping in mind; if wasm memory becomes tight, the next optimization is to avoid storing `mu`.
 
 ---
 
@@ -118,159 +118,137 @@ Chemical potential:
 Notes:
 - A controls strength of phase separation
 - kappa controls interface thickness and surface tension-like behavior
-- The stable phases are approximately phi ≈ +1 and phi ≈ -1
+- The stable phases are approximately phi ~ +1 and phi ~ -1
 
 ---
 
 ## Discrete update
 
 Let:
-- L(phi) = Laplacian(phi)
-- L(mu)  = Laplacian(mu)
+- `L(phi)` be the 6-neighbor Laplacian.
 
-Pass 1 (compute mu):
-- mu[i] = A*(phi0[i]^3 - phi0[i]) - kappa * L(phi0)[i]
+Two-pass kernel (recommended initial implementation):
 
-Pass 2 (update phi):
-- phi1[i] = phi0[i] + dt * M * L(mu)[i]
+Pass 1 (compute `mu`):
+- `mu[i] = A * (phi^3 - phi) - kappa * L(phi)[i]`
 
-Conservation:
-- CH is mass-conserving in theory; discretization should preserve mean(phi) approximately
-- In practice, small drift can occur; track mean(phi) to verify stability
+Pass 2 (update `phi`):
+- `phi_next[i] = phi[i] + dt * M * L(mu)[i]`
 
-Optional clamping:
-- Avoid hard clamping phi in CH; it can distort conservation and interface dynamics
-- If numerics blow up, reduce dt or use a more stable integrator instead of clamping
+Conservation / drift checks:
+- Mean(`phi`) should be approximately conserved.
+- In practice, floating point + boundaries + explicit Euler can drift; it is worth tracking mean(`phi`) in debug builds and/or occasionally in JS (sample a few slices).
+
+Practical stability knobs (match existing RDME approach):
+- Prefer adding `substeps: u32` to the params (internal loop doing `dt/substeps`) rather than clamping.
+- Avoid clamping `phi` hard to [-1,1] as a first response; it breaks mass conservation and tends to produce sticky, unphysical interfaces.
 
 ---
 
 ## Numerical stability guidance
 
-CH is more numerically sensitive than Gray–Scott due to effectively 4th-order diffusion.
+CH is more numerically sensitive than Gray-Scott because the update effectively behaves like a 4th-order diffusion term.
 
-Practical controls:
-- Use small dt initially; increase carefully
-- If using h = 1 and 6-neighbor Laplacian, dt often needs to be much smaller than for Gray–Scott
-- If unstable (checkerboarding / blow-up), reduce dt and/or M and/or kappa
+Practical controls (this codebase):
+- Use a small displayed `dt` (UI value), and internally run `substeps` like RDME does.
+- If you see checkerboarding or blow-up: reduce `dt`, increase `substeps`, and/or reduce `M`.
 
-Optional integrator upgrades (future):
-- semi-implicit spectral methods (FFT) are standard for CH but not required for PoC
-- explicit Euler is acceptable for PoC if dt is conservative
+Notes:
+- A semi-implicit spectral scheme (FFT) is the "real" standard for CH, but it is a major plumbing shift (FFT dependency, complex buffers, and different boundary assumptions). For this project, explicit + conservative timesteps is the pragmatic first step.
 
 ---
 
 ## Parallelization (Rust + Rayon + WASM threads)
 
-CH is "embarrassingly parallel" with gather stencils:
+This fits the existing gather-stencil parallelization model.
 
-- Each voxel write depends only on phi0 (and mu if two-pass)
-- No atomics required
-- Double-buffer ensures no write hazards
+Implementation pattern (copy from `wasm/src/gray_scott.rs` and `wasm/src/rdme.rs`):
+- Parallelize over `z` slices: `par_chunks_mut(nxy).enumerate()`.
+- For each slice, compute neighbor offsets using `x_minus/x_plus/y_minus/y_plus/z_minus/z_plus`.
 
-Parallel passes:
-1) mu pass:
-   parallel over i:
-     read phi0 + neighbors
-     write mu[i]
+Pass structure:
+- Pass 1: write `mu[z][y][x]` from `phi0`.
+- Pass 2: write `phi1[z][y][x]` from `mu`.
+- Swap buffers.
 
-2) phi pass:
-   parallel over i:
-     read mu + neighbors
-     write phi1[i]
-
-3) swap phi0/phi1
-
-4) compute aliveness scalar:
-   parallel over i:
-     aliveness[i] = <definition> from phi0 (or derived)
-
-WASM:
-- Use Rayon only if WASM threads + SharedArrayBuffer are available
-- Provide single-thread fallback path (same kernels, sequential loops)
+Wasm threading:
+- The worker already has optional thread pool init via `init_thread_pool()` and will run single-thread if threads are unavailable. CH should just use Rayon in the same style; no extra JS-side plumbing required.
 
 ---
 
 ## Initialization strategies (must support at least two)
 
-1) Spinodal decomposition (classic):
-- phi0[i] = phi_mean + noise
-- phi_mean in (-1, +1); common starting point is 0.0
-- noise small, e.g. uniform in [-0.01, 0.01]
+Match existing UI seeding conventions (see `web/config.js`): each strategy advertises a small set of seedings.
 
-This produces bicontinuous structure then coarsens into droplets/domains.
+Recommended seedings for CH:
 
-2) Droplet seeding:
-- set background phi = -1 (or +1)
-- seed one or multiple spheres with phi = +1 (or -1)
-- optional small noise
+1) Spinodal ("noise"):
+- `phi = phi_mean + uniform_noise`
+- Defaults: `phi_mean = 0.0`, `noise_amp = 0.01`.
 
-This produces distinct protocell-like droplets.
+2) Droplets ("spheres"):
+- Background `phi = -1` and seed `sphere_count` spheres of `phi = +1`.
+- Keep it deterministic (seeded RNG) like existing JS/Rust seeding.
 
-Notes:
-- Total mean(phi) controls volume fraction of each phase (droplet vs bicontinuous)
+Practical note:
+- Use the same seeding style as RDME/Gray-Scott: provide wasm methods like `seed_perlin(...)` / `seed_spheres(...)` or accept JS-side seeding by exposing `phi_ptr()`/`phi_len()`.
+- If you only pick one, pick wasm-side seeding; JS-side direct writes make it easy to accidentally desync chunk min/max unless you recompute.
 
 ---
 
-## Aliveness scalar output (for marching tetrahedra)
+## Exported scalar field (what the mesher consumes)
 
-Provide one exported f32 field, recommended options:
+In the current app, the mesher consumes a single scalar field called `v`.
+For CH we should export a mapped scalar so it fits the existing [0,1] convention:
+- `v = 0.5 + 0.5 * tanh(gain * phi)` (recommended default to keep gradient-based shading in range)
+- `v = (phi + 1)/2` (simplest)
 
-Option A (interfaces / membranes):
-- aliveness[i] = |grad(phi)|  (approx via central differences)
-This highlights boundaries and produces membrane-like isosurfaces.
+Why this mapping (practical):
+- The phase boundary `phi = 0` becomes `v = 0.5` (easy default iso).
+- Keeps the meshing/UI pipeline consistent with other modes that treat `v` as a normalized field.
 
-Option B (phase occupancy):
-- aliveness[i] = phi
-This yields solid droplet surfaces at a chosen iso-value (e.g., phi = 0).
-
-Option C (chemical potential magnitude):
-- aliveness[i] = |mu|  (requires mu field)
-This highlights active interfacial dynamics but is less interpretable visually.
-
-Initial recommendation:
-- Output phi as primary field (simple, robust)
-- Optionally add a mode to output |grad(phi)| for membrane visualization
+Optional second visualization mode (later):
+- Export `v = 1 - exp(-gain * |grad(phi)|)` to emphasize membranes/interfaces, similar to RDME's aliveness mapping.
+- That would require either a separate `v` buffer or writing into `v` on publish.
 
 ---
 
 ## Parameter set (initial, non-binding)
 
-These are starting points; tune empirically for stable dynamics at 128^3.
+Expose a minimal param set similar to other sims (`*_Params` with getters/setters):
 
-- A     : 1.0
-- kappa : 1.0 (increase for thicker interfaces; decrease for sharper)
-- M     : 1.0 (controls coarsening speed)
-- dt    : start small (e.g., 0.01 in lattice units), adjust upward cautiously
+- `a` (A): phase separation strength, start 1.0
+- `kappa`: interface thickness, start 1.0
+- `m` (M): mobility, start 1.0
+- `dt`: start 0.01 (displayed dt)
+- `substeps`: start 2..=8 (internal stability knob)
 
-If coarsening is too fast:
-- reduce M or dt
-
-If interfaces are too thin / noisy:
-- increase kappa
-
-If separation is weak:
-- increase A
+Suggested UI defaults (practical):
+- `dt = 0.01` is more realistic for explicit CH than 0.1.
+- If targeting 192^3, start with `substeps = 4` so users can still drag dt a bit without instant blow-up.
 
 ---
 
 ## Success criteria
 
 Behavioral:
-- produces stable phase separation structures (droplets or bicontinuous domains)
-- evolution continues over long runs (coarsening / ripening is visible)
-- interface surfaces are clean and visually meaningful in marching tetrahedra output
+- Stable phase separation (spinodal -> coarsening) and/or droplet ripening.
+- Clean `phi=0` surfaces without persistent numerical checkerboarding.
 
 Technical:
-- stable under Rayon parallelism (native and wasm threads)
-- no atomics, no locks
-- mean(phi) remains approximately conserved (monitor drift)
+- No atomics/locks; gather stencils only.
+- No per-step allocations.
+- Works in wasm single-thread, and scales under wasm threads when available.
+
+Performance:
+- Similar structure to RDME: 2 parallel passes over `n` per simulation step (+ optional publish-time chunk-range recompute).
 
 ---
 
 ## Extensions (explicitly not required for PoC)
 
 1) CH + reactions (protocell coupling):
-- add one or more reaction–diffusion fields that preferentially localize in one phase
+- add one or more reaction-diffusion fields that preferentially localize in one phase
 - make M or kappa depend on local chemistry (active emulsions)
 
 2) Hydrodynamics:

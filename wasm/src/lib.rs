@@ -3,11 +3,13 @@ use wasm_bindgen::prelude::*;
 mod math;
 mod meshing;
 
+mod cahn_hilliard;
 mod gray_scott;
 #[path = "sim.rs"]
 mod mesher;
 mod rdme;
 
+pub use cahn_hilliard::{CahnHilliardParams, CahnHilliardSimulation};
 pub use gray_scott::{GrayScottParams, Simulation};
 pub use mesher::ScalarFieldMesher;
 pub use rdme::{StochasticRdmeParams, StochasticRdmeSimulation};
