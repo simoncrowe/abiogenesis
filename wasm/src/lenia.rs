@@ -533,6 +533,11 @@ impl LeniaSimulation {
 
         let lut_scale = (GROWTH_LUT_SIZE - 1) as f32;
 
+        // For x in [radius, nx-radius-4], xwrap is contiguous for all taps.
+        let r = self.radius;
+        let x_contig_min = r;
+        let x_contig_max = nx.saturating_sub(r + 4);
+
         a1.par_chunks_mut(nxy).enumerate().for_each(|(z, a1z)| {
             let z_off = z * nxy;
 
@@ -547,9 +552,11 @@ impl LeniaSimulation {
                     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
                     {
                         unsafe {
-                            // Heavy SIMD path: process 4 voxels along x together so most kernel
-                            // taps become contiguous loads (except near wrap boundaries).
-                            // This is where SIMD starts paying off in 3D.
+                            // Branch-free interior path: for x in [radius, nx-radius-4], xwrap is
+                            // contiguous for all taps, so we can always do v128_load.
+                            // Use precomputed x-contiguous bounds from outer scope.
+
+                            // SIMD block over 4 voxels.
                             if x + 3 < nx {
                                 let base_center = y_off + x;
                                 let a_center =
@@ -557,23 +564,40 @@ impl LeniaSimulation {
 
                                 let mut u4 = f32x4_splat(0.0);
 
-                                for kt in kernel {
-                                    let yy = ywrap[(kt.iy as usize) * ny + y] as usize;
-                                    let zz = zwrap[(kt.iz as usize) * nz + z] as usize;
-                                    let base = zz * nxy + yy * nx;
+                                if x >= x_contig_min && x <= x_contig_max {
+                                    // Guaranteed contiguous x indices.
+                                    for kt in kernel {
+                                        let yy = ywrap[(kt.iy as usize) * ny + y] as usize;
+                                        let zz = zwrap[(kt.iz as usize) * nz + z] as usize;
+                                        let base = zz * nxy + yy * nx;
 
-                                    let base_ix = (kt.ix as usize) * nx + x;
-                                    let xx0 = xwrap[base_ix] as usize;
-                                    let xx1 = xwrap[base_ix + 1] as usize;
-                                    let xx2 = xwrap[base_ix + 2] as usize;
-                                    let xx3 = xwrap[base_ix + 3] as usize;
+                                        let base_ix = (kt.ix as usize) * nx + x;
+                                        let xx0 = xwrap[base_ix] as usize;
 
-                                    let a_vec =
-                                        if xx1 == xx0 + 1 && xx2 == xx0 + 2 && xx3 == xx0 + 3 {
-                                            // Fast contiguous load.
+                                        let a_vec =
+                                            v128_load(a0.as_ptr().add(base + xx0) as *const v128);
+                                        let w = f32x4_splat(kt.w);
+                                        u4 = f32x4_add(u4, f32x4_mul(w, a_vec));
+                                    }
+                                } else {
+                                    // Boundary path: wrap can break contiguity.
+                                    for kt in kernel {
+                                        let yy = ywrap[(kt.iy as usize) * ny + y] as usize;
+                                        let zz = zwrap[(kt.iz as usize) * nz + z] as usize;
+                                        let base = zz * nxy + yy * nx;
+
+                                        let base_ix = (kt.ix as usize) * nx + x;
+                                        let xx0 = xwrap[base_ix] as usize;
+                                        let xx1 = xwrap[base_ix + 1] as usize;
+                                        let xx2 = xwrap[base_ix + 2] as usize;
+                                        let xx3 = xwrap[base_ix + 3] as usize;
+
+                                        let a_vec = if xx1 == xx0 + 1
+                                            && xx2 == xx0 + 2
+                                            && xx3 == xx0 + 3
+                                        {
                                             v128_load(a0.as_ptr().add(base + xx0) as *const v128)
                                         } else {
-                                            // Fallback gather.
                                             f32x4(
                                                 a0[base + xx0],
                                                 a0[base + xx1],
@@ -582,12 +606,12 @@ impl LeniaSimulation {
                                             )
                                         };
 
-                                    let w = f32x4_splat(kt.w);
-                                    u4 = f32x4_add(u4, f32x4_mul(w, a_vec));
+                                        let w = f32x4_splat(kt.w);
+                                        u4 = f32x4_add(u4, f32x4_mul(w, a_vec));
+                                    }
                                 }
 
                                 // Per-lane LUT growth + writeback.
-                                // Unrolled to avoid dynamic-lane shuffles.
                                 let u0 = f32x4_extract_lane::<0>(u4);
                                 let u1 = f32x4_extract_lane::<1>(u4);
                                 let u2 = f32x4_extract_lane::<2>(u4);
