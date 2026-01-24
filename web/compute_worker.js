@@ -4,6 +4,8 @@ import init, {
   ScalarFieldMesher,
   StochasticRdmeParams,
   StochasticRdmeSimulation,
+  CahnHilliardParams,
+  CahnHilliardSimulation,
   init_thread_pool,
   rayon_num_threads,
 } from "../wasm/web/pkg/abiogenesis.js";
@@ -21,7 +23,7 @@ const MESH_INTERVAL_MS = 16;
 let wasm;
 
 let sim = null;
-let simKind = null; // "gray_scott" | "stochastic_rdme"
+let simKind = null; // "gray_scott" | "stochastic_rdme" | "cahn_hilliard"
 let mesher = null;
 let mesherDims = null;
 
@@ -49,7 +51,7 @@ let camPos = [0, 0, 0.25];
 let viewRadius = 0.35;
 let iso = 0.5;
 let color = [0.15, 0.65, 0.9, 0.9];
-let gradMagGain = 18.0;
+let gradMagGain = 12.0;
 
 let cameraDirty = true;
 
@@ -209,16 +211,22 @@ function gradMagToT(gradMag) {
 }
 
 function recolorByGradientMagnitude(normals, colors) {
+  // Leave other sims as-is.
+  // CH tends to produce much larger scalar gradients at the phase boundary, which
+  // makes the ramp saturate. We apply a cheap per-strategy remap to keep the
+  // control usable without changing the global behavior.
   const vertexCount = Math.floor(normals.length / 3);
   if (vertexCount <= 0) return;
 
   const alpha = colors.length >= 4 ? colors[3] : 1;
 
+  const k = simKind === "cahn_hilliard" ? 0.15 : 1.0;
+
   for (let i = 0; i < vertexCount; i++) {
     const nx = normals[i * 3 + 0];
     const ny = normals[i * 3 + 1];
     const nz = normals[i * 3 + 2];
-    const g = Math.hypot(nx, ny, nz);
+    const g = Math.hypot(nx, ny, nz) * k;
     const t = gradMagToT(g);
     const [r, gg, b] = ACTIVE_RAMP(t);
 
@@ -283,6 +291,10 @@ function mergeSimConfig(update) {
       ...simConfig.seeding,
       ...update.seeding,
     };
+  }
+
+  if (typeof update.exportMode === "string" || update.exportMode === null) {
+    simConfig.exportMode = update.exportMode;
   }
 }
 
@@ -418,6 +430,8 @@ function publishKeyframe(nowMs) {
     mesher.push_keyframe_from_gray_scott(sim);
   } else if (simKind === "stochastic_rdme") {
     mesher.push_keyframe_from_stochastic_rdme(sim);
+  } else if (simKind === "cahn_hilliard") {
+    mesher.push_keyframe_from_cahn_hilliard(sim);
   }
 
   lastKeyframeEpoch += 1;
@@ -613,6 +627,74 @@ async function restartSimulation() {
     } else {
       throw new Error(`unknown rdme seeding type: ${String(seeding.type)}`);
     }
+  } else if (strategyId === "cahn_hilliard") {
+    const params = new CahnHilliardParams();
+
+    params.set_a(Number(simConfig.params?.a ?? 1.0));
+    params.set_kappa(Number(simConfig.params?.kappa ?? 1.0));
+    params.set_m(Number(simConfig.params?.m ?? 0.2));
+
+    if (typeof params.set_substeps === "function") {
+      params.set_substeps(toU32(simConfig.params?.substeps, 4));
+    }
+    if (typeof params.set_pass_mode === "function") {
+      params.set_pass_mode(toU32(simConfig.params?.passMode, 2));
+    }
+    if (typeof params.set_approx_mode === "function") {
+      params.set_approx_mode(toU32(simConfig.params?.approxMode, 0));
+    }
+
+    // Seeding controls.
+    if (typeof params.set_phi_mean === "function") {
+      params.set_phi_mean(Number(simConfig.params?.phiMean ?? 0.0));
+    }
+    if (typeof params.set_noise_amp === "function") {
+      params.set_noise_amp(Number(simConfig.params?.noiseAmp ?? 0.01));
+    }
+
+    sim = new CahnHilliardSimulation(dims, dims, dims, currentSeed, params);
+    sim.set_dt(Number(simConfig.dt ?? 0.002));
+
+    const seeding = simConfig.seeding ?? {};
+
+    // Deterministic spinodal noise init (optionally override params).
+    const mean = Number(seeding.phiMean ?? simConfig.params?.phiMean ?? 0.0);
+    const amp = Number(seeding.noiseAmp ?? simConfig.params?.noiseAmp ?? 0.02);
+    if (typeof sim.seed_spinodal === "function") {
+      sim.seed_spinodal(mean, amp);
+    }
+
+    // Export mode selection (separate from initialization).
+    // For backwards compatibility, if exportMode isn't set, we pick something based on seeding.
+    const modeId = simConfig.exportMode;
+
+    if (modeId === "phase") {
+      if (typeof sim.set_export_mode === "function") sim.set_export_mode(0);
+      if (typeof sim.set_export_gain === "function") sim.set_export_gain(6.0);
+    } else if (modeId === "phase_tanh") {
+      if (typeof sim.set_export_mode === "function") sim.set_export_mode(2);
+      if (typeof sim.set_export_gain === "function") sim.set_export_gain(0.6);
+    } else if (modeId === "membranes") {
+      if (typeof sim.set_export_mode === "function") sim.set_export_mode(1);
+      if (typeof sim.set_export_gain === "function") sim.set_export_gain(4.0);
+    } else if (modeId === "energy") {
+      if (typeof sim.set_export_mode === "function") sim.set_export_mode(3);
+      if (typeof sim.set_export_gain === "function") sim.set_export_gain(2.0);
+    } else {
+      // Fallback mapping based on seeding type.
+      if (!seeding.type || seeding.type === "spinodal" || seeding.type === "droplets") {
+        if (typeof sim.set_export_mode === "function") sim.set_export_mode(2);
+        if (typeof sim.set_export_gain === "function") sim.set_export_gain(0.6);
+      } else if (seeding.type === "membranes") {
+        if (typeof sim.set_export_mode === "function") sim.set_export_mode(1);
+        if (typeof sim.set_export_gain === "function") sim.set_export_gain(4.0);
+      } else if (seeding.type === "energy") {
+        if (typeof sim.set_export_mode === "function") sim.set_export_mode(3);
+        if (typeof sim.set_export_gain === "function") sim.set_export_gain(2.0);
+      } else {
+        throw new Error(`unknown cahn-hilliard seeding type: ${String(seeding.type)}`);
+      }
+    }
   } else {
     throw new Error(`unknown simulation strategy: ${String(strategyId)}`);
   }
@@ -709,18 +791,39 @@ self.onmessage = (e) => {
 
     const prevStrategyId = simConfig.strategyId;
     const prevSeedingType = simConfig.seeding?.type;
+    const prevExportMode = simConfig.exportMode;
 
     mergeSimConfig(update);
 
     const strategyChanged = prevStrategyId !== simConfig.strategyId;
     const paramsChanged = !!(update.params && Object.keys(update.params).length > 0);
     const seedingChanged = !!update.seeding || prevSeedingType !== simConfig.seeding?.type;
+    const exportChanged = Object.prototype.hasOwnProperty.call(update, "exportMode") || prevExportMode !== simConfig.exportMode;
 
     if (strategyChanged || paramsChanged || seedingChanged) {
       void restartSimulation().catch((err) => {
         self.postMessage({ type: "error", message: String(err?.stack || err) });
       });
       return;
+    }
+
+    // Allow changing export mode without restarting the simulation.
+    if (exportChanged && simKind === "cahn_hilliard" && sim && typeof sim.set_export_mode === "function") {
+      const modeId = simConfig.exportMode;
+      if (modeId === "phase") {
+        sim.set_export_mode(0);
+      } else if (modeId === "phase_tanh") {
+        sim.set_export_mode(2);
+      } else if (modeId === "membranes") {
+        sim.set_export_mode(1);
+      } else if (modeId === "energy") {
+        sim.set_export_mode(3);
+      }
+      // Ensure a fresh v field is available for meshing.
+      if (typeof sim.recompute_chunk_ranges_from_v === "function") {
+        sim.recompute_chunk_ranges_from_v();
+      }
+      lastMeshAt = 0;
     }
 
     applyLiveConfigUpdate(update);
