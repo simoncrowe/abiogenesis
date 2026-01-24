@@ -372,6 +372,68 @@ export function createHudController({
         },
       ],
     },
+
+    replicator_mutator: {
+      id: "replicator_mutator",
+      name: "Replicator-mutator ecology",
+      params: [
+        { key: "dims", path: ["dims"], label: "Grid size (dims)", min: 16, max: 256, step: 1, defaultValue: 128, requiresRestart: true },
+        { key: "dt", path: ["dt"], label: "Simulation timestep (dt)", min: 0.0001, max: 0.2, step: 0.0001, defaultValue: 0.02, requiresRestart: false },
+        { key: "ticksPerSecond", path: ["ticksPerSecond"], label: "Publish rate (ticks/s)", min: 1, max: 60, step: 1, defaultValue: 5, requiresRestart: false },
+
+        { key: "types", path: ["params", "types"], label: "Types (K)", min: 2, max: 8, step: 1, defaultValue: 4, requiresRestart: true },
+
+        // These defaults aim for long-lived dynamics without runaway biomass.
+        { key: "gBase", path: ["params", "gBase"], label: "Growth base (g0)", min: 0, max: 1, step: 0.0001, defaultValue: 0.06, requiresRestart: true },
+        { key: "gSpread", path: ["params", "gSpread"], label: "Growth spread", min: 0, max: 2, step: 0.0001, defaultValue: 0.20, requiresRestart: true },
+        { key: "dR", path: ["params", "dR"], label: "Replicator decay (dR)", min: 0, max: 1, step: 0.0001, defaultValue: 0.03, requiresRestart: true },
+
+        { key: "feedRate", path: ["params", "feedRate"], label: "Feed rate", min: 0, max: 1, step: 0.0001, defaultValue: 0.04, requiresRestart: true },
+        { key: "dF", path: ["params", "dF"], label: "Feed decay (dF)", min: 0, max: 1, step: 0.0001, defaultValue: 0.01, requiresRestart: true },
+
+        { key: "mu", path: ["params", "mu"], label: "Mutation rate (mu)", min: 0, max: 0.05, step: 0.0001, defaultValue: 0.003, requiresRestart: true },
+
+        { key: "diffR", path: ["params", "diffR"], label: "Diffusion R (DR)", min: 0, max: 0.2, step: 0.0001, defaultValue: 0.01, requiresRestart: true },
+        { key: "diffF", path: ["params", "diffF"], label: "Diffusion F (DF)", min: 0, max: 2, step: 0.0001, defaultValue: 0.20, requiresRestart: true },
+
+        { key: "substeps", path: ["params", "substeps"], label: "Substeps", min: 1, max: 8, step: 1, defaultValue: 2, requiresRestart: true },
+      ],
+      seedings: [
+        {
+          id: "uniform",
+          name: "Uniform low density + noise",
+          config: {
+            type: "uniform",
+            noiseAmp: 0.02,
+            rBase: 0.012,
+            fInit: 0.8,
+          },
+        },
+        {
+          id: "regions",
+          name: "Localized regions",
+          config: {
+            type: "regions",
+            noiseAmp: 0.01,
+            rPeak: 0.08,
+            fInit: 0.8,
+          },
+        },
+        {
+          id: "gradient",
+          name: "Gradient-driven niches",
+          config: {
+            type: "gradient",
+            noiseAmp: 0.02,
+            rBase: 0.012,
+            fInit: 0.8,
+            feedBase: 0.04,
+            feedAmp: 1.0,
+            axis: 0,
+          },
+        },
+      ],
+    },
   };
 
   const simConfig = {
@@ -584,6 +646,12 @@ export function createHudController({
 
         // Wavefronts have fairly strong gradients; keep the gain moderate.
         gradMagGain = 4.0;
+        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
+      } else if (nextId === "replicator_mutator") {
+        // Biomass tends to live in a lower range; slightly lower iso works better.
+        volumeThreshold = 0.15;
+
+        gradMagGain = 3.0;
         if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
       }
       if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);

@@ -278,6 +278,17 @@ impl ScalarFieldMesher {
         );
     }
 
+    pub fn push_keyframe_from_replicator_mutator(
+        &mut self,
+        sim: &crate::replicator_mutator::ReplicatorMutatorSimulation,
+    ) {
+        self.push_keyframe_with_chunk_ranges(
+            sim.v_slice(),
+            sim.chunk_v_min_slice(),
+            sim.chunk_v_max_slice(),
+        );
+    }
+
     pub fn generate_mesh_visible(
         &mut self,
         cam_x: f32,

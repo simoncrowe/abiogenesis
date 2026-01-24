@@ -4,10 +4,6 @@ use rayon::prelude::*;
 
 const CHUNK: usize = 16;
 
-fn idx(nx: usize, ny: usize, x: usize, y: usize, z: usize) -> usize {
-    x + nx * (y + ny * z)
-}
-
 fn wrap(v: isize, n: usize) -> usize {
     let n = n as isize;
     let mut x = v % n;

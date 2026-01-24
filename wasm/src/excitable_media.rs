@@ -131,7 +131,6 @@ pub struct ExcitableMediaSimulation {
     z_plus: Vec<usize>,
 
     params: ExcitableMediaParams,
-    base_seed: u32,
     dt: f32,
 
     chunk_nx: usize,
@@ -188,7 +187,6 @@ impl ExcitableMediaSimulation {
             z_plus,
 
             params,
-            base_seed: seed,
             dt: 0.01,
 
             chunk_nx,
@@ -404,7 +402,6 @@ impl ExcitableMediaSimulation {
     fn step_kernel(&mut self, dt: f32) {
         let nx = self.nx;
         let ny = self.ny;
-        let nz = self.nz;
         let nxy = self.nxy;
 
         let eps_inv = 1.0 / self.params.epsilon.max(0.00001);

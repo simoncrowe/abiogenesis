@@ -8,6 +8,8 @@ import init, {
   CahnHilliardSimulation,
   ExcitableMediaParams,
   ExcitableMediaSimulation,
+  ReplicatorMutatorParams,
+  ReplicatorMutatorSimulation,
   init_thread_pool,
   rayon_num_threads,
 } from "../wasm/web/pkg/abiogenesis.js";
@@ -25,7 +27,7 @@ const MESH_INTERVAL_MS = 16;
 let wasm;
 
 let sim = null;
-let simKind = null; // "gray_scott" | "stochastic_rdme" | "cahn_hilliard" | "excitable_media"
+let simKind = null; // "gray_scott" | "stochastic_rdme" | "cahn_hilliard" | "excitable_media" | "replicator_mutator"
 let mesher = null;
 let mesherDims = null;
 
@@ -436,6 +438,8 @@ function publishKeyframe(nowMs) {
     mesher.push_keyframe_from_cahn_hilliard(sim);
   } else if (simKind === "excitable_media") {
     mesher.push_keyframe_from_excitable_media(sim);
+  } else if (simKind === "replicator_mutator") {
+    mesher.push_keyframe_from_replicator_mutator(sim);
   }
 
   lastKeyframeEpoch += 1;
@@ -743,6 +747,55 @@ async function restartSimulation() {
       );
     } else {
       throw new Error(`unknown excitable-media seeding type: ${String(seeding.type)}`);
+    }
+  } else if (strategyId === "replicator_mutator") {
+    const params = new ReplicatorMutatorParams();
+
+    // Core model params.
+    if (typeof params.set_types === "function") params.set_types(toU32(simConfig.params?.types, 4));
+
+    params.set_g_base(Number(simConfig.params?.gBase ?? 0.06));
+    params.set_g_spread(Number(simConfig.params?.gSpread ?? 0.20));
+    params.set_d_r(Number(simConfig.params?.dR ?? 0.03));
+
+    params.set_feed_rate(Number(simConfig.params?.feedRate ?? 0.04));
+    params.set_d_f(Number(simConfig.params?.dF ?? 0.01));
+
+    params.set_mu(Number(simConfig.params?.mu ?? 0.003));
+
+    params.set_d_r_diff(Number(simConfig.params?.diffR ?? 0.01));
+    params.set_d_f_diff(Number(simConfig.params?.diffF ?? 0.20));
+
+    if (typeof params.set_substeps === "function") {
+      params.set_substeps(toU32(simConfig.params?.substeps, 2));
+    }
+
+    sim = new ReplicatorMutatorSimulation(dims, dims, dims, currentSeed, params);
+    sim.set_dt(Number(simConfig.dt ?? 0.02));
+
+    const seeding = simConfig.seeding ?? {};
+    if (!seeding.type || seeding.type === "uniform") {
+      sim.seed_uniform(Number(seeding.noiseAmp ?? 0.02), Number(seeding.rBase ?? 0.012), Number(seeding.fInit ?? 0.8));
+    } else if (seeding.type === "regions") {
+      sim.seed_regions(Number(seeding.noiseAmp ?? 0.01), Number(seeding.rPeak ?? 0.08), Number(seeding.fInit ?? 0.8));
+    } else if (seeding.type === "gradient") {
+      sim.seed_gradient_niches(
+        Number(seeding.noiseAmp ?? 0.02),
+        Number(seeding.rBase ?? 0.012),
+        Number(seeding.fInit ?? 0.8),
+        Number(seeding.feedBase ?? 0.04),
+        Number(seeding.feedAmp ?? 1.0),
+        toU32(seeding.axis, 0),
+      );
+    } else {
+      throw new Error(`unknown replicator-mutator seeding type: ${String(seeding.type)}`);
+    }
+
+    // Optional live feed field update.
+    if (seeding.type === "gradient") {
+      sim.set_feed_gradient(Number(seeding.feedBase ?? 0.04), Number(seeding.feedAmp ?? 1.0), toU32(seeding.axis, 0));
+    } else {
+      sim.set_feed_uniform(Number(seeding.feedRate ?? simConfig.params?.feedRate ?? 0.04));
     }
   } else {
     throw new Error(`unknown simulation strategy: ${String(strategyId)}`);
