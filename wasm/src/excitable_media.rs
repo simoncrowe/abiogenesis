@@ -413,6 +413,9 @@ impl ExcitableMediaSimulation {
         let du = self.params.du;
         let dv = self.params.dv;
 
+        // Avoid Laplacian neighbor reads when diffusion is disabled.
+        // This is a big win because dv==0 is a very common Barkley setting.
+
         let x_minus = &self.x_minus;
         let x_plus = &self.x_plus;
         let y_minus = &self.y_minus;
@@ -448,21 +451,29 @@ impl ExcitableMediaSimulation {
                         let u = u0[c];
                         let v = v0[c];
 
-                        let u_lap = u0[y_off + x_minus[x]]
-                            + u0[y_off + x_plus[x]]
-                            + u0[y_off_m + x]
-                            + u0[y_off_p + x]
-                            + u0[y_off_zm + x]
-                            + u0[y_off_zp + x]
-                            - 6.0 * u;
+                        let u_lap = if du != 0.0 {
+                            u0[y_off + x_minus[x]]
+                                + u0[y_off + x_plus[x]]
+                                + u0[y_off_m + x]
+                                + u0[y_off_p + x]
+                                + u0[y_off_zm + x]
+                                + u0[y_off_zp + x]
+                                - 6.0 * u
+                        } else {
+                            0.0
+                        };
 
-                        let v_lap = v0[y_off + x_minus[x]]
-                            + v0[y_off + x_plus[x]]
-                            + v0[y_off_m + x]
-                            + v0[y_off_p + x]
-                            + v0[y_off_zm + x]
-                            + v0[y_off_zp + x]
-                            - 6.0 * v;
+                        let v_lap = if dv != 0.0 {
+                            v0[y_off + x_minus[x]]
+                                + v0[y_off + x_plus[x]]
+                                + v0[y_off_m + x]
+                                + v0[y_off_p + x]
+                                + v0[y_off_zm + x]
+                                + v0[y_off_zp + x]
+                                - 6.0 * v
+                        } else {
+                            0.0
+                        };
 
                         // Barkley reaction terms.
                         let ru = eps_inv * u * (1.0 - u) * (u - (v + b) * a_inv);

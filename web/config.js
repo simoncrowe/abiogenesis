@@ -321,8 +321,8 @@ export function createHudController({
         { key: "ticksPerSecond", path: ["ticksPerSecond"], label: "Publish rate (ticks/s)", min: 1, max: 60, step: 1, defaultValue: 5, requiresRestart: false },
 
         { key: "epsilon", path: ["params", "epsilon"], label: "Timescale sep (epsilon)", min: 0.001, max: 0.2, step: 0.0001, defaultValue: 0.03, requiresRestart: true },
-        { key: "a", path: ["params", "a"], label: "Threshold (a)", min: 0.1, max: 2, step: 0.0001, defaultValue: 0.75, requiresRestart: true },
-        { key: "b", path: ["params", "b"], label: "Bias (b)", min: 0, max: 0.2, step: 0.0001, defaultValue: 0.02, requiresRestart: true },
+        { key: "a", path: ["params", "a"], label: "Threshold (a)", min: 0.1, max: 2, step: 0.0001, defaultValue: 0.85, requiresRestart: true },
+        { key: "b", path: ["params", "b"], label: "Bias (b)", min: 0, max: 0.2, step: 0.0001, defaultValue: 0.01, requiresRestart: true },
 
         { key: "du", path: ["params", "du"], label: "Diffusion u (Du)", min: 0, max: 3, step: 0.001, defaultValue: 1.0, requiresRestart: true },
         { key: "dv", path: ["params", "dv"], label: "Diffusion v (Dv)", min: 0, max: 1, step: 0.001, defaultValue: 0.0, requiresRestart: true },
@@ -340,6 +340,16 @@ export function createHudController({
           },
         },
         {
+          id: "turbulence",
+          name: "A: Turbulence (self-sustaining)",
+          config: {
+            type: "random",
+            noiseAmp: 0.02,
+            excitedProb: 0.01,
+            preset: "A",
+          },
+        },
+        {
           id: "sources",
           name: "Seeded sources",
           config: {
@@ -347,6 +357,17 @@ export function createHudController({
             sourceCount: 8,
             radius01: 0.06,
             uPeak: 1.0,
+          },
+        },
+        {
+          id: "scroll",
+          name: "B: Scroll waves (stable)",
+          config: {
+            type: "sources",
+            sourceCount: 4,
+            radius01: 0.10,
+            uPeak: 1.2,
+            preset: "B",
           },
         },
       ],

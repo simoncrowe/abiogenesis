@@ -712,10 +712,27 @@ async function restartSimulation() {
       params.set_substeps(toU32(simConfig.params?.substeps, 1));
     }
 
-    sim = new ExcitableMediaSimulation(dims, dims, dims, currentSeed, params);
-    sim.set_dt(Number(simConfig.dt ?? 0.01));
-
+    // Optional: seeding presets can also tweak params/dt (we apply before constructing).
     const seeding = simConfig.seeding ?? {};
+    if (seeding.preset === "A") {
+      // A: self-sustaining turbulence (more nucleation)
+      params.set_epsilon(Number(seeding.epsilon ?? simConfig.params?.epsilon ?? 0.03));
+      params.set_a(Number(seeding.a ?? simConfig.params?.a ?? 0.85));
+      params.set_b(Number(seeding.b ?? simConfig.params?.b ?? 0.01));
+      params.set_du(Number(seeding.du ?? simConfig.params?.du ?? 1.0));
+      params.set_dv(Number(seeding.dv ?? simConfig.params?.dv ?? 0.0));
+    } else if (seeding.preset === "B") {
+      // B: longer-lived scroll-wave-ish regime (fewer, larger sources)
+      params.set_epsilon(Number(seeding.epsilon ?? simConfig.params?.epsilon ?? 0.04));
+      params.set_a(Number(seeding.a ?? simConfig.params?.a ?? 0.80));
+      params.set_b(Number(seeding.b ?? simConfig.params?.b ?? 0.02));
+      params.set_du(Number(seeding.du ?? simConfig.params?.du ?? 0.9));
+      params.set_dv(Number(seeding.dv ?? simConfig.params?.dv ?? 0.0));
+    }
+
+    sim = new ExcitableMediaSimulation(dims, dims, dims, currentSeed, params);
+    sim.set_dt(Number(seeding.dt ?? simConfig.dt ?? 0.01));
+
     if (!seeding.type || seeding.type === "random") {
       sim.seed_random(Number(seeding.noiseAmp ?? 0.02), Number(seeding.excitedProb ?? 0.002));
     } else if (seeding.type === "sources") {
