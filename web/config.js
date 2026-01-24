@@ -434,6 +434,33 @@ export function createHudController({
         },
       ],
     },
+
+    lenia: {
+      id: "lenia",
+      name: "Continuous CA (Lenia)",
+      params: [
+        { key: "dims", path: ["dims"], label: "Grid size (dims)", min: 16, max: 256, step: 1, defaultValue: 128, requiresRestart: true },
+        { key: "dt", path: ["dt"], label: "Simulation timestep (dt)", min: 0.001, max: 1, step: 0.001, defaultValue: 0.10, requiresRestart: false },
+        { key: "ticksPerSecond", path: ["ticksPerSecond"], label: "Publish rate (ticks/s)", min: 1, max: 60, step: 1, defaultValue: 5, requiresRestart: false },
+
+        { key: "radius", path: ["params", "radius"], label: "Kernel radius (R)", min: 1, max: 10, step: 1, defaultValue: 5, requiresRestart: true },
+        { key: "mu", path: ["params", "mu"], label: "Growth mu", min: 0, max: 1, step: 0.0001, defaultValue: 0.15, requiresRestart: true },
+        { key: "sigma", path: ["params", "sigma"], label: "Growth sigma", min: 0.0001, max: 0.2, step: 0.0001, defaultValue: 0.03, requiresRestart: true },
+        { key: "sharpness", path: ["params", "sharpness"], label: "Kernel sharpness", min: 0.1, max: 4, step: 0.1, defaultValue: 1.0, requiresRestart: true },
+      ],
+      seedings: [
+        {
+          id: "noise",
+          name: "Random noise",
+          config: { type: "noise", amp: 0.02 },
+        },
+        {
+          id: "blobs",
+          name: "Seeded blobs",
+          config: { type: "blobs", blobCount: 12, radius01: 0.08, peak: 1.0 },
+        },
+      ],
+    },
   };
 
   const simConfig = {
@@ -652,6 +679,12 @@ export function createHudController({
         volumeThreshold = 0.15;
 
         gradMagGain = 3.0;
+        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
+      } else if (nextId === "lenia") {
+        volumeThreshold = 0.50;
+
+        // Lenia fields are smooth; use a lower gain so the ramp doesn't saturate.
+        gradMagGain = 1.0;
         if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
       }
       if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);

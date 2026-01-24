@@ -289,6 +289,14 @@ impl ScalarFieldMesher {
         );
     }
 
+    pub fn push_keyframe_from_lenia(&mut self, sim: &crate::lenia::LeniaSimulation) {
+        self.push_keyframe_with_chunk_ranges(
+            sim.v_slice(),
+            sim.chunk_v_min_slice(),
+            sim.chunk_v_max_slice(),
+        );
+    }
+
     pub fn generate_mesh_visible(
         &mut self,
         cam_x: f32,

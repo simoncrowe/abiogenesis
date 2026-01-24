@@ -10,6 +10,8 @@ import init, {
   ExcitableMediaSimulation,
   ReplicatorMutatorParams,
   ReplicatorMutatorSimulation,
+  LeniaParams,
+  LeniaSimulation,
   init_thread_pool,
   rayon_num_threads,
 } from "../wasm/web/pkg/abiogenesis.js";
@@ -27,7 +29,7 @@ const MESH_INTERVAL_MS = 16;
 let wasm;
 
 let sim = null;
-let simKind = null; // "gray_scott" | "stochastic_rdme" | "cahn_hilliard" | "excitable_media" | "replicator_mutator"
+let simKind = null; // "gray_scott" | "stochastic_rdme" | "cahn_hilliard" | "excitable_media" | "replicator_mutator" | "lenia"
 let mesher = null;
 let mesherDims = null;
 
@@ -440,6 +442,8 @@ function publishKeyframe(nowMs) {
     mesher.push_keyframe_from_excitable_media(sim);
   } else if (simKind === "replicator_mutator") {
     mesher.push_keyframe_from_replicator_mutator(sim);
+  } else if (simKind === "lenia") {
+    mesher.push_keyframe_from_lenia(sim);
   }
 
   lastKeyframeEpoch += 1;
@@ -750,10 +754,10 @@ async function restartSimulation() {
     }
   } else if (strategyId === "replicator_mutator") {
     const params = new ReplicatorMutatorParams();
-
+ 
     // Core model params.
     if (typeof params.set_types === "function") params.set_types(toU32(simConfig.params?.types, 4));
-
+ 
     params.set_g_base(Number(simConfig.params?.gBase ?? 0.06));
     params.set_g_spread(Number(simConfig.params?.gSpread ?? 0.20));
     params.set_d_r(Number(simConfig.params?.dR ?? 0.03));
@@ -796,6 +800,29 @@ async function restartSimulation() {
       sim.set_feed_gradient(Number(seeding.feedBase ?? 0.04), Number(seeding.feedAmp ?? 1.0), toU32(seeding.axis, 0));
     } else {
       sim.set_feed_uniform(Number(seeding.feedRate ?? simConfig.params?.feedRate ?? 0.04));
+    }
+  } else if (strategyId === "lenia") {
+    const params = new LeniaParams();
+
+    params.set_radius(toU32(simConfig.params?.radius, 5));
+    params.set_mu(Number(simConfig.params?.mu ?? 0.15));
+    params.set_sigma(Number(simConfig.params?.sigma ?? 0.03));
+    params.set_kernel_sharpness(Number(simConfig.params?.sharpness ?? 1.0));
+
+    sim = new LeniaSimulation(dims, dims, dims, currentSeed, params);
+    sim.set_dt(Number(simConfig.dt ?? 0.10));
+
+    const seeding = simConfig.seeding ?? {};
+    if (!seeding.type || seeding.type === "noise") {
+      sim.seed_noise(Number(seeding.amp ?? 0.02));
+    } else if (seeding.type === "blobs") {
+      sim.seed_blobs(
+        toU32(seeding.blobCount, 12),
+        Number(seeding.radius01 ?? 0.08),
+        Number(seeding.peak ?? 1.0),
+      );
+    } else {
+      throw new Error(`unknown lenia seeding type: ${String(seeding.type)}`);
     }
   } else {
     throw new Error(`unknown simulation strategy: ${String(strategyId)}`);

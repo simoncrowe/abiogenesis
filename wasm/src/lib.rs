@@ -6,6 +6,7 @@ mod meshing;
 mod cahn_hilliard;
 mod excitable_media;
 mod gray_scott;
+mod lenia;
 #[path = "sim.rs"]
 mod mesher;
 mod rdme;
@@ -14,6 +15,7 @@ mod replicator_mutator;
 pub use cahn_hilliard::{CahnHilliardParams, CahnHilliardSimulation};
 pub use excitable_media::{ExcitableMediaParams, ExcitableMediaSimulation};
 pub use gray_scott::{GrayScottParams, Simulation};
+pub use lenia::{LeniaParams, LeniaSimulation};
 pub use mesher::ScalarFieldMesher;
 pub use rdme::{StochasticRdmeParams, StochasticRdmeSimulation};
 pub use replicator_mutator::{ReplicatorMutatorParams, ReplicatorMutatorSimulation};
