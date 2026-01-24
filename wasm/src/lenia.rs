@@ -98,13 +98,14 @@ impl LeniaParams {
     }
 }
 
+const GROWTH_LUT_SIZE: usize = 2048;
+
 #[derive(Clone, Copy)]
 struct KernelTap {
-    // Flattened neighbor delta index into the lattice (periodic wrap applied at runtime).
-    // This is only valid for interior arithmetic; we still need per-axis wrapping.
-    dx: i16,
-    dy: i16,
-    dz: i16,
+    // Indices are pre-shifted to [0, 2R] so the inner loop avoids add/cast.
+    ix: u16,
+    iy: u16,
+    iz: u16,
     w: f32,
 }
 
@@ -127,9 +128,9 @@ fn build_kernel(radius: usize, sharpness: f32) -> Vec<KernelTap> {
                 let t = d2 / r2.max(1e-6);
                 let w = (-sharpness * t).exp();
                 taps.push(KernelTap {
-                    dx: dx as i16,
-                    dy: dy as i16,
-                    dz: dz as i16,
+                    ix: (dx + r) as u16,
+                    iy: (dy + r) as u16,
+                    iz: (dz + r) as u16,
                     w,
                 });
                 sum += w as f64;
@@ -144,6 +145,19 @@ fn build_kernel(radius: usize, sharpness: f32) -> Vec<KernelTap> {
     }
 
     taps
+}
+
+fn build_growth_lut(mu: f32, sigma: f32) -> Vec<f32> {
+    let sigma = sigma.max(0.00001);
+    let inv_2sig2 = 1.0 / (2.0 * sigma * sigma);
+
+    let mut lut = vec![0.0f32; GROWTH_LUT_SIZE];
+    for i in 0..GROWTH_LUT_SIZE {
+        let u = (i as f32) / ((GROWTH_LUT_SIZE - 1) as f32);
+        let du = u - mu;
+        lut[i] = 2.0 * (-(du * du) * inv_2sig2).exp() - 1.0;
+    }
+    lut
 }
 
 #[wasm_bindgen]
@@ -171,6 +185,11 @@ pub struct LeniaSimulation {
     chunk_v_max: Vec<f32>,
 
     kernel: Vec<KernelTap>,
+
+    // Precomputed growth lookup table for G(u), u in [0,1].
+    growth_lut: Vec<f32>,
+    growth_mu: f32,
+    growth_sigma: f32,
 
     a0: Vec<f32>,
     a1: Vec<f32>,
@@ -200,6 +219,9 @@ impl LeniaSimulation {
         let r = params.radius as usize;
         let kernel = build_kernel(r, params.kernel_sharpness);
 
+        let growth_lut = build_growth_lut(params.mu, params.sigma);
+        let growth_mu = params.mu;
+        let growth_sigma = params.sigma;
         // Precompute wrapped coordinate maps for dx/dy/dz in [-R, R].
         // Using u16 is safe for dims<=256 and cuts memory bandwidth.
         let rspan = 2 * r + 1;
@@ -241,6 +263,10 @@ impl LeniaSimulation {
             chunk_v_max: vec![f32::NEG_INFINITY; chunk_total],
 
             kernel,
+
+            growth_lut,
+            growth_mu,
+            growth_sigma,
 
             a0: vec![0.0; n],
             a1: vec![0.0; n],
@@ -297,10 +323,18 @@ impl LeniaSimulation {
 
     pub fn set_mu(&mut self, mu: f32) {
         self.params.mu = mu.max(0.0).min(1.0);
+        if (self.params.mu - self.growth_mu).abs() > 1e-6 {
+            self.growth_mu = self.params.mu;
+            self.growth_lut = build_growth_lut(self.growth_mu, self.growth_sigma);
+        }
     }
 
     pub fn set_sigma(&mut self, sigma: f32) {
         self.params.sigma = sigma.max(0.00001).min(1.0);
+        if (self.params.sigma - self.growth_sigma).abs() > 1e-6 {
+            self.growth_sigma = self.params.sigma;
+            self.growth_lut = build_growth_lut(self.growth_mu, self.growth_sigma);
+        }
     }
 
     pub fn seed_noise(&mut self, amp: f32) {
@@ -483,20 +517,18 @@ impl LeniaSimulation {
         let ny = self.ny;
         let nxy = self.nxy;
 
-        let radius = self.radius;
         let nz = self.nz;
         let xwrap = &self.xwrap;
         let ywrap = &self.ywrap;
         let zwrap = &self.zwrap;
 
         let kernel = &self.kernel;
-
-        let mu = self.params.mu;
-        let sigma = self.params.sigma.max(0.00001);
-        let inv_2sig2 = 1.0 / (2.0 * sigma * sigma);
+        let lut = &self.growth_lut;
 
         let a0 = &self.a0;
         let a1 = &mut self.a1;
+
+        let lut_scale = (GROWTH_LUT_SIZE - 1) as f32;
 
         a1.par_chunks_mut(nxy).enumerate().for_each(|(z, a1z)| {
             let z_off = z * nxy;
@@ -511,11 +543,11 @@ impl LeniaSimulation {
                     // Convolution: use precomputed wrap tables for dx/dy/dz.
                     let mut u = 0.0f32;
                     for t in kernel {
-                        let di_x = (t.dx as isize + radius as isize) as usize;
-                        let di_y = (t.dy as isize + radius as isize) as usize;
-                        let di_z = (t.dz as isize + radius as isize) as usize;
+                        // taps store pre-shifted indices in [0, 2R].
+                        let di_x = t.ix as usize;
+                        let di_y = t.iy as usize;
+                        let di_z = t.iz as usize;
 
-                        // taps are generated within [-R,R], so indices are valid.
                         let xx = xwrap[di_x * nx + x] as usize;
                         let yy = ywrap[di_y * ny + y] as usize;
                         let zz = zwrap[di_z * nz + z] as usize;
@@ -523,9 +555,13 @@ impl LeniaSimulation {
                         u += t.w * a0[idx(nx, ny, xx, yy, zz)];
                     }
 
-                    // Growth function.
-                    let du = u - mu;
-                    let g = 2.0 * (-(du * du) * inv_2sig2).exp() - 1.0;
+                    // Growth function via LUT (avoid exp() in the hot loop).
+                    let u01 = u.max(0.0).min(1.0);
+                    let t = u01 * lut_scale;
+                    let i0 = t as usize;
+                    let i1 = (i0 + 1).min(GROWTH_LUT_SIZE - 1);
+                    let f = t - (i0 as f32);
+                    let g = lut[i0] + (lut[i1] - lut[i0]) * f;
 
                     let mut an = a + dt * g;
                     if !an.is_finite() {
