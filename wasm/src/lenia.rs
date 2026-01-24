@@ -2,6 +2,9 @@ use wasm_bindgen::prelude::*;
 
 use rayon::prelude::*;
 
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+use core::arch::wasm32::*;
+
 const CHUNK: usize = 16;
 
 fn idx(nx: usize, ny: usize, x: usize, y: usize, z: usize) -> usize {
@@ -99,6 +102,17 @@ impl LeniaParams {
 }
 
 const GROWTH_LUT_SIZE: usize = 2048;
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[inline(always)]
+unsafe fn v128_f32_sum4(v: v128) -> f32 {
+    // Horizontal sum of 4 f32 lanes.
+    let shuf1 = i32x4_shuffle::<2, 3, 0, 1>(v, v);
+    let sum1 = f32x4_add(v, shuf1);
+    let shuf2 = i32x4_shuffle::<1, 0, 3, 2>(sum1, sum1);
+    let sum2 = f32x4_add(sum1, shuf2);
+    f32x4_extract_lane::<0>(sum2)
+}
 
 #[derive(Clone, Copy)]
 struct KernelTap {
@@ -541,18 +555,72 @@ impl LeniaSimulation {
                     let a = a0[c];
 
                     // Convolution: use precomputed wrap tables for dx/dy/dz.
+                    // SIMD fast path reduces scalar loop overhead (gather still dominates).
                     let mut u = 0.0f32;
-                    for t in kernel {
-                        // taps store pre-shifted indices in [0, 2R].
-                        let di_x = t.ix as usize;
-                        let di_y = t.iy as usize;
-                        let di_z = t.iz as usize;
 
-                        let xx = xwrap[di_x * nx + x] as usize;
-                        let yy = ywrap[di_y * ny + y] as usize;
-                        let zz = zwrap[di_z * nz + z] as usize;
+                    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+                    {
+                        unsafe {
+                            let mut acc = f32x4_splat(0.0);
+                            let mut i = 0usize;
+                            let len = kernel.len();
+                            while i + 4 <= len {
+                                // Load 4 taps (scalar -> SIMD).
+                                let t0 = kernel[i];
+                                let t1 = kernel[i + 1];
+                                let t2 = kernel[i + 2];
+                                let t3 = kernel[i + 3];
 
-                        u += t.w * a0[idx(nx, ny, xx, yy, zz)];
+                                let xx0 = xwrap[(t0.ix as usize) * nx + x] as usize;
+                                let yy0 = ywrap[(t0.iy as usize) * ny + y] as usize;
+                                let zz0 = zwrap[(t0.iz as usize) * nz + z] as usize;
+
+                                let xx1 = xwrap[(t1.ix as usize) * nx + x] as usize;
+                                let yy1 = ywrap[(t1.iy as usize) * ny + y] as usize;
+                                let zz1 = zwrap[(t1.iz as usize) * nz + z] as usize;
+
+                                let xx2 = xwrap[(t2.ix as usize) * nx + x] as usize;
+                                let yy2 = ywrap[(t2.iy as usize) * ny + y] as usize;
+                                let zz2 = zwrap[(t2.iz as usize) * nz + z] as usize;
+
+                                let xx3 = xwrap[(t3.ix as usize) * nx + x] as usize;
+                                let yy3 = ywrap[(t3.iy as usize) * ny + y] as usize;
+                                let zz3 = zwrap[(t3.iz as usize) * nz + z] as usize;
+
+                                let a_vec = f32x4(
+                                    a0[idx(nx, ny, xx0, yy0, zz0)],
+                                    a0[idx(nx, ny, xx1, yy1, zz1)],
+                                    a0[idx(nx, ny, xx2, yy2, zz2)],
+                                    a0[idx(nx, ny, xx3, yy3, zz3)],
+                                );
+
+                                let w_vec = f32x4(t0.w, t1.w, t2.w, t3.w);
+                                acc = f32x4_add(acc, f32x4_mul(w_vec, a_vec));
+
+                                i += 4;
+                            }
+
+                            u += v128_f32_sum4(acc);
+
+                            while i < len {
+                                let t = kernel[i];
+                                let xx = xwrap[(t.ix as usize) * nx + x] as usize;
+                                let yy = ywrap[(t.iy as usize) * ny + y] as usize;
+                                let zz = zwrap[(t.iz as usize) * nz + z] as usize;
+                                u += t.w * a0[idx(nx, ny, xx, yy, zz)];
+                                i += 1;
+                            }
+                        }
+                    }
+
+                    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+                    {
+                        for t in kernel {
+                            let xx = xwrap[(t.ix as usize) * nx + x] as usize;
+                            let yy = ywrap[(t.iy as usize) * ny + y] as usize;
+                            let zz = zwrap[(t.iz as usize) * nz + z] as usize;
+                            u += t.w * a0[idx(nx, ny, xx, yy, zz)];
+                        }
                     }
 
                     // Growth function via LUT (avoid exp() in the hot loop).

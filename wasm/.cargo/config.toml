@@ -4,7 +4,7 @@ rustflags = [
   # unstable as a `-C target-feature` knob. This is expected; it is controlled
   # by the toolchain/target and is required by wasm-bindgen-rayon.
   "-C",
-  "target-feature=+atomics,+bulk-memory,+mutable-globals",
+  "target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128",
 
   # Required for wasm threads / SharedArrayBuffer memory:
   # - import memory so JS can construct it as `shared: true`
