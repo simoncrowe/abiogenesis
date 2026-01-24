@@ -4,12 +4,14 @@ mod math;
 mod meshing;
 
 mod cahn_hilliard;
+mod excitable_media;
 mod gray_scott;
 #[path = "sim.rs"]
 mod mesher;
 mod rdme;
 
 pub use cahn_hilliard::{CahnHilliardParams, CahnHilliardSimulation};
+pub use excitable_media::{ExcitableMediaParams, ExcitableMediaSimulation};
 pub use gray_scott::{GrayScottParams, Simulation};
 pub use mesher::ScalarFieldMesher;
 pub use rdme::{StochasticRdmeParams, StochasticRdmeSimulation};

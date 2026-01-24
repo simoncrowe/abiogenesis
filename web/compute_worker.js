@@ -6,6 +6,8 @@ import init, {
   StochasticRdmeSimulation,
   CahnHilliardParams,
   CahnHilliardSimulation,
+  ExcitableMediaParams,
+  ExcitableMediaSimulation,
   init_thread_pool,
   rayon_num_threads,
 } from "../wasm/web/pkg/abiogenesis.js";
@@ -23,7 +25,7 @@ const MESH_INTERVAL_MS = 16;
 let wasm;
 
 let sim = null;
-let simKind = null; // "gray_scott" | "stochastic_rdme" | "cahn_hilliard"
+let simKind = null; // "gray_scott" | "stochastic_rdme" | "cahn_hilliard" | "excitable_media"
 let mesher = null;
 let mesherDims = null;
 
@@ -432,6 +434,8 @@ function publishKeyframe(nowMs) {
     mesher.push_keyframe_from_stochastic_rdme(sim);
   } else if (simKind === "cahn_hilliard") {
     mesher.push_keyframe_from_cahn_hilliard(sim);
+  } else if (simKind === "excitable_media") {
+    mesher.push_keyframe_from_excitable_media(sim);
   }
 
   lastKeyframeEpoch += 1;
@@ -629,7 +633,7 @@ async function restartSimulation() {
     }
   } else if (strategyId === "cahn_hilliard") {
     const params = new CahnHilliardParams();
-
+ 
     params.set_a(Number(simConfig.params?.a ?? 1.0));
     params.set_kappa(Number(simConfig.params?.kappa ?? 1.0));
     params.set_m(Number(simConfig.params?.m ?? 0.2));
@@ -694,6 +698,51 @@ async function restartSimulation() {
       } else {
         throw new Error(`unknown cahn-hilliard seeding type: ${String(seeding.type)}`);
       }
+    }
+  } else if (strategyId === "excitable_media") {
+    const params = new ExcitableMediaParams();
+
+    params.set_epsilon(Number(simConfig.params?.epsilon ?? 0.03));
+    params.set_a(Number(simConfig.params?.a ?? 0.75));
+    params.set_b(Number(simConfig.params?.b ?? 0.02));
+    params.set_du(Number(simConfig.params?.du ?? 1.0));
+    params.set_dv(Number(simConfig.params?.dv ?? 0.0));
+
+    if (typeof params.set_substeps === "function") {
+      params.set_substeps(toU32(simConfig.params?.substeps, 1));
+    }
+
+    // Optional: seeding presets can also tweak params/dt (we apply before constructing).
+    const seeding = simConfig.seeding ?? {};
+    if (seeding.preset === "A") {
+      // A: self-sustaining turbulence (more nucleation)
+      params.set_epsilon(Number(seeding.epsilon ?? simConfig.params?.epsilon ?? 0.03));
+      params.set_a(Number(seeding.a ?? simConfig.params?.a ?? 0.85));
+      params.set_b(Number(seeding.b ?? simConfig.params?.b ?? 0.01));
+      params.set_du(Number(seeding.du ?? simConfig.params?.du ?? 1.0));
+      params.set_dv(Number(seeding.dv ?? simConfig.params?.dv ?? 0.0));
+    } else if (seeding.preset === "B") {
+      // B: longer-lived scroll-wave-ish regime (fewer, larger sources)
+      params.set_epsilon(Number(seeding.epsilon ?? simConfig.params?.epsilon ?? 0.04));
+      params.set_a(Number(seeding.a ?? simConfig.params?.a ?? 0.80));
+      params.set_b(Number(seeding.b ?? simConfig.params?.b ?? 0.02));
+      params.set_du(Number(seeding.du ?? simConfig.params?.du ?? 0.9));
+      params.set_dv(Number(seeding.dv ?? simConfig.params?.dv ?? 0.0));
+    }
+
+    sim = new ExcitableMediaSimulation(dims, dims, dims, currentSeed, params);
+    sim.set_dt(Number(seeding.dt ?? simConfig.dt ?? 0.01));
+
+    if (!seeding.type || seeding.type === "random") {
+      sim.seed_random(Number(seeding.noiseAmp ?? 0.02), Number(seeding.excitedProb ?? 0.002));
+    } else if (seeding.type === "sources") {
+      sim.seed_sources(
+        toU32(seeding.sourceCount, 8),
+        Number(seeding.radius01 ?? 0.06),
+        Number(seeding.uPeak ?? 1.0),
+      );
+    } else {
+      throw new Error(`unknown excitable-media seeding type: ${String(seeding.type)}`);
     }
   } else {
     throw new Error(`unknown simulation strategy: ${String(strategyId)}`);

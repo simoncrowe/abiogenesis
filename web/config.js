@@ -311,6 +311,67 @@ export function createHudController({
         },
       ],
     },
+
+    excitable_media: {
+      id: "excitable_media",
+      name: "Excitable media (Barkley)",
+      params: [
+        { key: "dims", path: ["dims"], label: "Grid size (dims)", min: 16, max: 256, step: 1, defaultValue: 128, requiresRestart: true },
+        { key: "dt", path: ["dt"], label: "Simulation timestep (dt)", min: 0.0001, max: 0.05, step: 0.0001, defaultValue: 0.01, requiresRestart: false },
+        { key: "ticksPerSecond", path: ["ticksPerSecond"], label: "Publish rate (ticks/s)", min: 1, max: 60, step: 1, defaultValue: 5, requiresRestart: false },
+
+        { key: "epsilon", path: ["params", "epsilon"], label: "Timescale sep (epsilon)", min: 0.001, max: 0.2, step: 0.0001, defaultValue: 0.03, requiresRestart: true },
+        { key: "a", path: ["params", "a"], label: "Threshold (a)", min: 0.1, max: 2, step: 0.0001, defaultValue: 0.85, requiresRestart: true },
+        { key: "b", path: ["params", "b"], label: "Bias (b)", min: 0, max: 0.2, step: 0.0001, defaultValue: 0.01, requiresRestart: true },
+
+        { key: "du", path: ["params", "du"], label: "Diffusion u (Du)", min: 0, max: 3, step: 0.001, defaultValue: 1.0, requiresRestart: true },
+        { key: "dv", path: ["params", "dv"], label: "Diffusion v (Dv)", min: 0, max: 1, step: 0.001, defaultValue: 0.0, requiresRestart: true },
+
+        { key: "substeps", path: ["params", "substeps"], label: "Substeps", min: 1, max: 8, step: 1, defaultValue: 1, requiresRestart: true },
+      ],
+      seedings: [
+        {
+          id: "random",
+          name: "Random excitation",
+          config: {
+            type: "random",
+            noiseAmp: 0.02,
+            excitedProb: 0.002,
+          },
+        },
+        {
+          id: "turbulence",
+          name: "A: Turbulence (self-sustaining)",
+          config: {
+            type: "random",
+            noiseAmp: 0.02,
+            excitedProb: 0.01,
+            preset: "A",
+          },
+        },
+        {
+          id: "sources",
+          name: "Seeded sources",
+          config: {
+            type: "sources",
+            sourceCount: 8,
+            radius01: 0.06,
+            uPeak: 1.0,
+          },
+        },
+        {
+          id: "scroll",
+          name: "B: Scroll waves (stable)",
+          config: {
+            type: "sources",
+            sourceCount: 4,
+            radius01: 0.10,
+            uPeak: 1.2,
+            preset: "B",
+          },
+        },
+      ],
+    },
   };
 
   const simConfig = {
@@ -322,6 +383,9 @@ export function createHudController({
     seeding: simStrategies.gray_scott.seedings[0].config,
     exportMode: null,
   };
+
+  // Ensure defaults are applied for the initial strategy.
+  resetSimConfigForStrategy(simConfig.strategyId);
 
   function resetSimConfigForStrategy(strategyId) {
     const strategy = simStrategies[strategyId];
@@ -512,6 +576,14 @@ export function createHudController({
         // CH interface gradients are typically sharper than Gray-Scott.
         // Use a lower default gain so the ramp doesn't instantly saturate.
         gradMagGain = 1.0;
+        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
+      } else if (nextId === "excitable_media") {
+        // Excitable media exported field is raw activator u (unbounded-ish), but iso around 0.5
+        // tends to pick out the wavefront volume nicely.
+        volumeThreshold = 0.50;
+
+        // Wavefronts have fairly strong gradients; keep the gain moderate.
+        gradMagGain = 4.0;
         if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
       }
       if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);
