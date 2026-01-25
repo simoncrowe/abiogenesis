@@ -652,6 +652,11 @@ export function createHudController({
       // (User can still override via the "volume threshold" slider afterward.)
       if (nextId === "stochastic_rdme") {
         volumeThreshold = 0.10;
+
+        gradMagGain = 10.0;
+        // RDME tends to look best slightly closer-in by default.
+        viewRadius = 0.40;
+        if (viewRadiusInput) viewRadiusInput.value = viewRadius.toFixed(2);
       } else if (nextId === "gray_scott") {
         volumeThreshold = 0.25;
       } else if (nextId === "cahn_hilliard") {

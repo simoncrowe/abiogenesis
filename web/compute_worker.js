@@ -57,7 +57,7 @@ let camPos = [0, 0, 0.25];
 let viewRadius = 0.35;
 let iso = 0.5;
 let color = [0.15, 0.65, 0.9, 0.9];
-let gradMagGain = 12.0;
+let gradMagGain = 10.0;
 
 let cameraDirty = true;
 
@@ -77,8 +77,10 @@ let stepsWindow = 0;
 let lastRateAt = 0;
 
 let lastVoxelStatsAt = 0;
-const VOXEL_STATS_INTERVAL_MS = 200;
-const VOXEL_STATS_SIDE = 16;
+// Keep latency low for audio control. This samples a 16^3 neighbourhood (~4k reads),
+// so 20Hz is a good default.
+const VOXEL_STATS_INTERVAL_MS = 50;
+const VOXEL_STATS_SIDE = 6;
 const VOXEL_STATS_HALF = Math.floor(VOXEL_STATS_SIDE / 2);
 
 function clampInt(v, lo, hi) {
@@ -957,6 +959,13 @@ function handleCamera(msg) {
   }
 
   if (changed) cameraDirty = true;
+
+  // Reduce control latency: if the camera moved and we haven't published stats
+  // recently, compute immediately rather than waiting for the next loop tick.
+  const now = performance.now();
+  if (changed && (lastVoxelStatsAt === 0 || now - lastVoxelStatsAt >= VOXEL_STATS_INTERVAL_MS * 0.5)) {
+    maybePublishCameraVoxelStats();
+  }
 }
 
 function applyLiveConfigUpdate(update) {

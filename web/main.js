@@ -1,7 +1,7 @@
 import { FlyCamera, createMouseFlightController } from "./camera.js";
 import { createAoBlurProgram, createAoCompositeProgram, createAoProgram, createMeshProgram } from "./shaders.js";
 import { createHudController } from "./config.js";
-import { bootAudio, ensureGlobalReverb, isAudioBooted, noteOn, setReverb } from "./synth.js";
+import { bootAudio, ensureGlobalReverb, isAudioBooted, noteOn, setFilter, setReverb } from "./synth.js";
 import { createMusicEngine, mapMaxToReverbRoom, mapMeanToCutoff } from "./music.js";
 
 const canvas = document.querySelector("#c");
@@ -440,7 +440,8 @@ async function main() {
   // Must be initialized before `createHudController` triggers the first worker start.
   const statsTarget = { mean: 0.5, max: 0.5 };
   const statsSmooth = { mean: 0.5, max: 0.5 };
-  const SMOOTH_TAU_S = 0.75;
+  // Lower smoothing lag so voxel stats influence synth params faster.
+  const SMOOTH_TAU_S = 0.25;
 
   const updateSmoothedStats = (dt) => {
     const a = 1 - Math.exp(-Math.max(0, dt) / SMOOTH_TAU_S);
@@ -456,15 +457,13 @@ async function main() {
   const music = createMusicEngine({
     bpm: 60,
     seed: 1,
-    // Easy toggle: set to `true` to switch back to arpeggiation.
-    arpeggiate: false,
+    arpeggiate: true,
     onNote: (midiNote) => {
-      const cutoff = mapMeanToCutoff(statsSmooth.mean);
       noteOn({
         note: midiNote,
-        amp: 0.18,
-        release: 0.28,
-        cutoff,
+        amp: 0.5,
+        attack: 0.02,
+        release: 1.4,
       });
     },
     getNoteParams: () => ({}),
@@ -495,7 +494,7 @@ async function main() {
   audioTestBtn?.addEventListener("click", () => {
     try {
       // A slightly low note so it's clearly audible.
-      noteOn({ note: 48, amp: 0.25, release: 2.5, cutoff: 75 });
+      noteOn({ note: 48, amp: 0.22, attack: 0.02, release: 2.5 });
     } catch (e) {
       console.error(e);
       refreshAudioUi();
@@ -517,7 +516,7 @@ async function main() {
   let lastCamSendAt = 0;
   function sendCamera() {
     const now = performance.now();
-    if (now - lastCamSendAt < 33) return;
+    if (now - lastCamSendAt < 20) return;
     lastCamSendAt = now;
 
     if (!workerReady || !computeWorker) return;
@@ -560,6 +559,9 @@ async function main() {
   let lastT = performance.now();
   let lastReverbAt = 0;
   let lastAudioHudAt = 0;
+  let lastFilterAt = 0;
+  let lastCutoff = null;
+  let lastRes = null;
   let lastReverbRoom = null;
   let lastReverbMix = null;
   function render(tNow) {
@@ -575,8 +577,21 @@ async function main() {
 
     updateSmoothedStats(dt);
     if (isAudioBooted()) {
-      if (tNow - lastReverbAt > 200) {
-        const room = mapMaxToReverbRoom(statsSmooth.max);
+      if (tNow - lastFilterAt > 50) {
+        const cutoff = mapMeanToCutoff(statsSmooth.mean);
+        const res = 0.45;
+        const cutoffChanged = lastCutoff === null || Math.abs(cutoff - lastCutoff) > 0.2;
+        const resChanged = lastRes === null || Math.abs(res - lastRes) > 0.01;
+        if (cutoffChanged || resChanged) {
+          lastFilterAt = tNow;
+          lastCutoff = cutoff;
+          lastRes = res;
+          setFilter({ cutoff, res });
+        }
+      }
+      if (tNow - lastReverbAt > 100) {
+        const camSettings = hud.getCameraSettings();
+        const room = mapMaxToReverbRoom(statsSmooth.max, camSettings.iso);
         const mix = 0.2 + 0.35 * room;
 
         const roomChanged = lastReverbRoom === null || Math.abs(room - lastReverbRoom) > 0.01;
@@ -593,11 +608,12 @@ async function main() {
     if (tNow - lastAudioHudAt > 100) {
       lastAudioHudAt = tNow;
       const cutoff = mapMeanToCutoff(statsSmooth.mean);
-      const room = mapMaxToReverbRoom(statsSmooth.max);
+      const camSettings = hud.getCameraSettings();
+      const room = mapMaxToReverbRoom(statsSmooth.max, camSettings.iso);
       const mix = 0.2 + 0.35 * room;
       setAudioStats(
         `mean ${statsSmooth.mean.toFixed(3)}  max ${statsSmooth.max.toFixed(3)}\n` +
-        `cutoff ${cutoff.toFixed(1)}  reverb room ${room.toFixed(3)}  mix ${mix.toFixed(3)}  amp ${0.18.toFixed(2)}`,
+        `cutoff ${cutoff.toFixed(1)}  reverb room ${room.toFixed(3)}  mix ${mix.toFixed(3)}  amp ${0.14.toFixed(2)}`,
       );
     }
 

@@ -1,5 +1,7 @@
 function clamp01(v) {
-  return Math.max(0, Math.min(1, v));
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
 }
 
 function pick(rng, arr) {
@@ -34,11 +36,11 @@ const PROGRESSION = {
   // "_" is a pause/rest.
   _: { chord: null, next: ["I", "IV", "vi"] },
 
-  I: { chord: (oct) => chordMaj7(60 + 12 * oct), next: ["IV", "vi", "ii", "_"] },
+  I: { chord: (oct) => chordMaj7(60 + 12 * oct), next: ["IV", "vi", "ii"] },
   ii: { chord: (oct) => chordMin7(62 + 12 * oct), next: ["V", "IV"] },
   IV: { chord: (oct) => chordMaj7(65 + 12 * oct), next: ["I", "V", "ii", "_"] },
   V: { chord: (oct) => chordDom7(67 + 12 * oct), next: ["I", "vi"] },
-  vi: { chord: (oct) => chordMin7(69 + 12 * oct), next: ["IV", "ii", "V", "_"] },
+  vi: { chord: (oct) => chordMin7(69 + 12 * oct), next: ["IV", "ii", "V"] },
 };
 
 export function createMusicEngine({
@@ -140,7 +142,17 @@ export function mapMeanToCutoff(mean01) {
   return 45 + t * 65;
 }
 
-export function mapMaxToReverbRoom(max01) {
-  // Spec: inverse of max.
-  return clamp01(1 - clamp01(max01)) * 3;
+export function mapMaxToReverbRoom(max01, volumeThreshold01 = 0.5) {
+  // Use the meshing volume threshold (iso) as the scale: when the local max scalar
+  // value approaches iso, the camera is near a surface we consider "solid".
+  const maxT = clamp01(max01);
+  const isoT = clamp01(volumeThreshold01);
+
+  // 1 when max=0 (open space), 0 when max>=iso (near/inside solids).
+  const denom = Math.max(1e-6, isoT);
+  let room = clamp01((isoT - maxT) / denom);
+
+  // Emphasize the near-surface region.
+  room *= room; 
+  return 0.5 +  (room * 4) // Scale reverb room size
 }
