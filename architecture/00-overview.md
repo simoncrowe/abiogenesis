@@ -1,8 +1,8 @@
-# Abiogenesis Isosurface MVP – Architecture Overview
+# Autopoiesis Isosurface MVP – Architecture Overview
 
 ## Purpose
 
-This project implements a minimal, extensible system for exploring abiogenesis-like
+This project implements a minimal, extensible system for exploring autopoiesis-like
 emergent structure using:
 
 - a large lattice-based simulation ("lattice gas"-style)

@@ -15,7 +15,7 @@ https://localhost:8080 {
   @wasm_pkg_root {
     path /wasm/web/pkg /wasm/web/pkg/
   }
-  rewrite @wasm_pkg_root /wasm/web/pkg/abiogenesis.js
+  rewrite @wasm_pkg_root /wasm/web/pkg/autopoiesis.js
 
   file_server
 
@@ -30,4 +30,3 @@ https://localhost:8080 {
   # Make HTTPS explicit for localhost.
   tls internal
 }
-

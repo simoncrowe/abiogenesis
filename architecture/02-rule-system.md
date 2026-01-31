@@ -76,7 +76,7 @@ It is:
 - local
 - extensively documented and understood
 
-This makes it an ideal starting point for an abiogenesis-focused MVP.
+This makes it an ideal starting point for an autopoiesis-focused MVP.
 
 ---
 
@@ -162,7 +162,7 @@ These scalars feed directly into the isosurface meshing pipeline.
 - These structures:
   - emerge without explicit entities
   - are not cells
-  - align well with abiogenesis themes
+  - align well with autopoiesis themes
 
 ---
 

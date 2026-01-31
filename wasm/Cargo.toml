@@ -1,5 +1,5 @@
 [package]
-name = "abiogenesis"
+name = "autopoiesis"
 version = "0.1.0"
 edition = "2021"
 
@@ -14,4 +14,3 @@ js-sys = "0.3"
 # In-WASM parallelism (requires crossOriginIsolated + SharedArrayBuffer in the browser).
 rayon = "1.10"
 wasm-bindgen-rayon = { version = "1.2", features = ["nightly"] }
-

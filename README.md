@@ -1,6 +1,6 @@
-# abiogenesis
+# autopoiesis
 
-Abiogenesis-inspired pattern exploration MVP:
+Autopoiesis-inspired pattern exploration MVP:
 - 3D Gray–Scott reaction–diffusion simulation (Rust → wasm)
 - Isosurface extraction in wasm (marching tetrahedra)
 - WebGL 2.0 viewer + free-fly camera (JavaScript)

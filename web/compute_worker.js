@@ -14,7 +14,7 @@ import init, {
   LeniaSimulation,
   init_thread_pool,
   rayon_num_threads,
-} from "../wasm/web/pkg/abiogenesis.js";
+} from "../wasm/web/pkg/autopoiesis.js";
 
 const DEFAULT_DIMS = 192;
 const DEFAULT_TICKS_PER_SECOND = 5;
