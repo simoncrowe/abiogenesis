@@ -72,6 +72,92 @@ export function createHudController({
   let aoSoftness = 3;
   let aoBias = 0.002;
 
+  // Per-strategy visual defaults.
+  // This prevents cross-strategy "carry" when switching strategies.
+  const visualDefaultsByStrategyId = {
+    gray_scott: {
+      display: { viewRadius: 0.60, volumeThreshold: 0.25, gradMagGain: 12.0, meshOpacity: 0.75, lightIntensity: 1.0 },
+      ao: { enabled: false, intensity: 1.5, radiusPx: 16, samples: 8, softness: 3, bias: 0.002 },
+      sss: { enabled: false, wrap: 0.40, backStrength: 0.40, backPower: 2.0 },
+    },
+    stochastic_rdme: {
+      display: { viewRadius: 0.40, volumeThreshold: 0.10, gradMagGain: 10.0, meshOpacity: 0.70, lightIntensity: 1.0 },
+      ao: { enabled: false, intensity: 1.35, radiusPx: 18, samples: 8, softness: 3, bias: 0.002 },
+      sss: { enabled: false, wrap: 0.45, backStrength: 0.35, backPower: 2.2 },
+    },
+    cahn_hilliard: {
+      display: { viewRadius: 0.35, volumeThreshold: 0.50, gradMagGain: 1.0, meshOpacity: 0.70, lightIntensity: 1.0 },
+      ao: { enabled: true, intensity: 1.7, radiusPx: 18, samples: 8, softness: 3, bias: 0.002 },
+      sss: { enabled: false, wrap: 0.38, backStrength: 0.45, backPower: 1.8 },
+    },
+    excitable_media: {
+      display: { viewRadius: 0.60, volumeThreshold: 0.50, gradMagGain: 4.0, meshOpacity: 0.55, lightIntensity: 1.0 },
+      ao: { enabled: false, intensity: 1.4, radiusPx: 16, samples: 8, softness: 3, bias: 0.002 },
+      sss: { enabled: false, wrap: 0.50, backStrength: 0.30, backPower: 2.4 },
+    },
+    replicator_mutator: {
+      display: { viewRadius: 0.55, volumeThreshold: 0.15, gradMagGain: 3.0, meshOpacity: 0.65, lightIntensity: 1.0 },
+      ao: { enabled: false, intensity: 1.5, radiusPx: 18, samples: 8, softness: 3, bias: 0.002 },
+      sss: { enabled: false, wrap: 0.42, backStrength: 0.40, backPower: 2.0 },
+    },
+    lenia: {
+      display: { viewRadius: 0.45, volumeThreshold: 0.50, gradMagGain: 1.0, meshOpacity: 0.70, lightIntensity: 0.95 },
+      ao: { enabled: true, intensity: 1.55, radiusPx: 16, samples: 8, softness: 3, bias: 0.002 },
+      sss: { enabled: false, wrap: 0.40, backStrength: 0.45, backPower: 1.9 },
+    },
+  };
+
+  function applyVisualDefaultsForStrategy(strategyId) {
+    const preset = visualDefaultsByStrategyId?.[strategyId] ?? visualDefaultsByStrategyId?.gray_scott;
+    if (!preset) return;
+
+    // General display
+    viewRadius = Number(preset.display?.viewRadius ?? viewRadius);
+    volumeThreshold = Number(preset.display?.volumeThreshold ?? volumeThreshold);
+    gradMagGain = Number(preset.display?.gradMagGain ?? gradMagGain);
+    meshOpacity = Number(preset.display?.meshOpacity ?? meshOpacity);
+    lightIntensity = Number(preset.display?.lightIntensity ?? lightIntensity);
+
+    // Keep the mesh alpha in sync.
+    meshColor[3] = meshOpacity;
+
+    if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);
+    if (viewRadiusInput) viewRadiusInput.value = viewRadius.toFixed(2);
+    if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
+    if (meshOpacityInput) meshOpacityInput.value = meshOpacity.toFixed(2);
+    if (lightIntensityInput) setNumberInputValue(lightIntensityInput, lightIntensity, lightIntensityInput.step);
+
+    // AO
+    aoEnabled = Boolean(preset.ao?.enabled);
+    aoIntensity = Number(preset.ao?.intensity ?? aoIntensity);
+    aoRadiusPx = Number(preset.ao?.radiusPx ?? aoRadiusPx);
+    aoSamples = Math.trunc(Number(preset.ao?.samples ?? aoSamples));
+    aoSoftness = Math.trunc(Number(preset.ao?.softness ?? aoSoftness));
+    aoBias = Number(preset.ao?.bias ?? aoBias);
+
+    if (aoEnabledInput) aoEnabledInput.checked = aoEnabled;
+    if (aoIntensityInput) setNumberInputValue(aoIntensityInput, aoIntensity, aoIntensityInput.step);
+    if (aoRadiusInput) setNumberInputValue(aoRadiusInput, aoRadiusPx, aoRadiusInput.step);
+    if (aoSamplesInput) setNumberInputValue(aoSamplesInput, aoSamples, aoSamplesInput.step);
+    if (aoSoftnessInput) setNumberInputValue(aoSoftnessInput, aoSoftness, aoSoftnessInput.step);
+    if (aoBiasInput) setNumberInputValue(aoBiasInput, aoBias, aoBiasInput.step);
+
+    // SSS
+    sssEnabled = Boolean(preset.sss?.enabled);
+    sssWrap = Number(preset.sss?.wrap ?? sssWrap);
+    sssBackStrength = Number(preset.sss?.backStrength ?? sssBackStrength);
+    sssBackPower = Number(preset.sss?.backPower ?? sssBackPower);
+
+    if (sssEnabledInput) sssEnabledInput.checked = sssEnabled;
+    if (sssWrapInput) setNumberInputValue(sssWrapInput, sssWrap, sssWrapInput.step);
+    if (sssBackStrengthInput) setNumberInputValue(sssBackStrengthInput, sssBackStrength, sssBackStrengthInput.step);
+    if (sssBackPowerInput) setNumberInputValue(sssBackPowerInput, sssBackPower, sssBackPowerInput.step);
+
+    // Refresh disabled/enabled states (declared later in this scope).
+    if (typeof updateAoUi === "function") updateAoUi();
+    if (typeof updateSssUi === "function") updateSssUi();
+  }
+
 
   const simExportModes = {
     // Shared IDs; not every strategy will expose all.
@@ -648,51 +734,8 @@ export function createHudController({
       const prevDims = simConfig.dims;
       resetSimConfigForStrategy(nextId);
 
-      // Strategy-specific default isosurface threshold.
-      // (User can still override via the "volume threshold" slider afterward.)
-      if (nextId === "stochastic_rdme") {
-        volumeThreshold = 0.10;
-
-        gradMagGain = 10.0;
-        // RDME tends to look best slightly closer-in by default.
-        viewRadius = 0.40;
-        if (viewRadiusInput) viewRadiusInput.value = viewRadius.toFixed(2);
-      } else if (nextId === "gray_scott") {
-        volumeThreshold = 0.25;
-      } else if (nextId === "cahn_hilliard") {
-        // CH exports a phase boundary centered at v=0.5.
-        volumeThreshold = 0.50;
-
-        // Smaller view radius tends to work better with CH droplets.
-        viewRadius = 0.35;
-        if (viewRadiusInput) viewRadiusInput.value = viewRadius.toFixed(2);
-
-        // CH interface gradients are typically sharper than Gray-Scott.
-        // Use a lower default gain so the ramp doesn't instantly saturate.
-        gradMagGain = 1.0;
-        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
-      } else if (nextId === "excitable_media") {
-        // Excitable media exported field is raw activator u (unbounded-ish), but iso around 0.5
-        // tends to pick out the wavefront volume nicely.
-        volumeThreshold = 0.50;
-
-        // Wavefronts have fairly strong gradients; keep the gain moderate.
-        gradMagGain = 4.0;
-        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
-      } else if (nextId === "replicator_mutator") {
-        // Biomass tends to live in a lower range; slightly lower iso works better.
-        volumeThreshold = 0.15;
-
-        gradMagGain = 3.0;
-        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
-      } else if (nextId === "lenia") {
-        volumeThreshold = 0.50;
-
-        // Lenia fields are smooth; use a lower gain so the ramp doesn't saturate.
-        gradMagGain = 1.0;
-        if (gradMagGainInput) gradMagGainInput.value = String(gradMagGain);
-      }
-      if (volumeThresholdInput) volumeThresholdInput.value = volumeThreshold.toFixed(2);
+      // Apply per-strategy defaults for display + AO + SSS (users can still override after).
+      applyVisualDefaultsForStrategy(nextId);
 
       renderSimInitSelect();
       renderSimExportSelect();
@@ -729,12 +772,12 @@ export function createHudController({
   if (sssBackStrengthInput) setNumberInputValue(sssBackStrengthInput, sssBackStrength, sssBackStrengthInput.step);
   if (sssBackPowerInput) setNumberInputValue(sssBackPowerInput, sssBackPower, sssBackPowerInput.step);
 
-  const updateSssUi = () => {
+  function updateSssUi() {
     const enabled = sssEnabled;
     if (sssWrapInput) sssWrapInput.disabled = !enabled;
     if (sssBackStrengthInput) sssBackStrengthInput.disabled = !enabled;
     if (sssBackPowerInput) sssBackPowerInput.disabled = !enabled;
-  };
+  }
 
   sssEnabledInput?.addEventListener("change", () => {
     sssEnabled = sssEnabledInput.checked === true;
@@ -750,14 +793,14 @@ export function createHudController({
   if (aoSoftnessInput) setNumberInputValue(aoSoftnessInput, aoSoftness, aoSoftnessInput.step);
   if (aoBiasInput) setNumberInputValue(aoBiasInput, aoBias, aoBiasInput.step);
 
-  const updateAoUi = () => {
+  function updateAoUi() {
     const enabled = aoEnabled;
     if (aoIntensityInput) aoIntensityInput.disabled = !enabled;
     if (aoRadiusInput) aoRadiusInput.disabled = !enabled;
     if (aoSamplesInput) aoSamplesInput.disabled = !enabled;
     if (aoSoftnessInput) aoSoftnessInput.disabled = !enabled;
     if (aoBiasInput) aoBiasInput.disabled = !enabled;
-  };
+  }
 
   aoEnabledInput?.addEventListener("change", () => {
     aoEnabled = aoEnabledInput.checked === true;
