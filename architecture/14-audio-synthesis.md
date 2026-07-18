@@ -1,5 +1,10 @@
 # Audio Synthesis
 
+> **Largely superseded by [15-granular-ambient.md](15-granular-ambient.md).**
+> The chord-progression / subtractive-synthesis composition approach below is
+> replaced by granular soundscape voices. The Supersonic engine notes and the
+> camera neighbourhood voxel stats sections remain in force.
+
 The goal is to develop an audio synthesis engine that
 accepts musical notes and other metadata from 
 the main JavaScript thread.
