@@ -85,6 +85,8 @@ let lastVoxelStatsAt = 0;
 const VOXEL_STATS_INTERVAL_MS = WORKER_TUNING.voxelStatsIntervalMs;
 const VOXEL_STATS_SIDE = WORKER_TUNING.voxelStatsSide;
 const VOXEL_STATS_HALF = Math.floor(VOXEL_STATS_SIDE / 2);
+// Reused scratch for the neighbourhood sample (used to compute the median).
+const voxelScratch = new Float32Array(VOXEL_STATS_SIDE * VOXEL_STATS_SIDE * VOXEL_STATS_SIDE);
 
 function clampInt(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v | 0));
@@ -143,6 +145,7 @@ function maybePublishCameraVoxelStats() {
       const base = zBase + dims * y;
       for (let x = x0; x <= x1; x++) {
         const s = clamp01(v[base + x]);
+        voxelScratch[n] = s;
         n++;
         sum += s;
         if (s < min) min = s;
@@ -154,12 +157,20 @@ function maybePublishCameraVoxelStats() {
   if (n <= 0) return;
 
   const mean = sum / n;
+
+  // Exact median over the (small) neighbourhood sample.
+  const sorted = voxelScratch.subarray(0, n);
+  sorted.sort();
+  const mid = n >> 1;
+  const median = (n & 1) ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5;
+
   self.postMessage({
     type: MSG_TYPES.CAMERA_VOXEL_STATS,
     dims,
     center: [cx, cy, cz],
     side: VOXEL_STATS_SIDE,
     mean,
+    median,
     min,
     max,
     range: max - min,

@@ -1,8 +1,8 @@
 import { FlyCamera, createMouseFlightController, mat4Invert, mat4Mul, mat4Perspective } from "./camera.js";
 import { createAoBlurProgram, createAoCompositeProgram, createAoProgram, createMeshProgram } from "./shaders.js";
 import { createHudController } from "./config.js";
-import { bootAudio, ensureGlobalReverb, isAudioBooted, noteOn, setFilter, setReverb } from "./synth.js";
-import { DRONE_PROGRESSION, createMusicEngine, mapMaxToReverbRoom, mapMeanToCutoff } from "./music.js";
+import { bootAudio, ensureGlobalReverb, isAudioBooted, noteOn } from "./synth.js";
+import { createSoundscape } from "./soundscape.js";
 import { MSG_TYPES } from "./msg_types.js";
 
 const canvas = document.querySelector("#c");
@@ -348,10 +348,13 @@ async function main() {
         return;
       }
 
-      // Future: camera neighbourhood scalar stats (normalized 0..1)
+      // Camera neighbourhood scalar stats (normalized 0..1), driving the soundscape.
       if (msg.type === MSG_TYPES.CAMERA_VOXEL_STATS) {
         if (Number.isFinite(msg.mean)) statsTarget.mean = Math.max(0, Math.min(1, msg.mean));
+        if (Number.isFinite(msg.median)) statsTarget.median = Math.max(0, Math.min(1, msg.median));
         if (Number.isFinite(msg.max)) statsTarget.max = Math.max(0, Math.min(1, msg.max));
+        if (Number.isFinite(msg.min)) statsTarget.min = Math.max(0, Math.min(1, msg.min));
+        if (Number.isFinite(msg.range)) statsTarget.range = Math.max(0, Math.min(1, msg.range));
         return;
       }
 
@@ -371,15 +374,16 @@ async function main() {
 
   // Smoothed camera-neighbourhood stats (normalized 0..1).
   // Must be initialized before `createHudController` triggers the first worker start.
-  const statsTarget = { mean: 0.5, max: 0.5 };
-  const statsSmooth = { mean: 0.5, max: 0.5 };
+  const statsTarget = { mean: 0.5, median: 0.5, max: 0.5, min: 0.5, range: 0.0 };
+  const statsSmooth = { mean: 0.5, median: 0.5, max: 0.5, min: 0.5, range: 0.0 };
   // Lower smoothing lag so voxel stats influence synth params faster.
   const SMOOTH_TAU_S = 0.25;
 
   const updateSmoothedStats = (dt) => {
     const a = 1 - Math.exp(-Math.max(0, dt) / SMOOTH_TAU_S);
-    statsSmooth.mean += (statsTarget.mean - statsSmooth.mean) * a;
-    statsSmooth.max += (statsTarget.max - statsSmooth.max) * a;
+    for (const k of Object.keys(statsSmooth)) {
+      statsSmooth[k] += (statsTarget[k] - statsSmooth[k]) * a;
+    }
   };
 
   const hud = createHudController({
@@ -387,80 +391,21 @@ async function main() {
     getWorker: () => computeWorker,
   });
 
-  function randomSeed32() {
-    if (globalThis.crypto?.getRandomValues) {
-      const u32 = new Uint32Array(1);
-      globalThis.crypto.getRandomValues(u32);
-      return u32[0] >>> 0;
-    }
-    return Math.floor(Math.random() * 2 ** 32) >>> 0;
-  }
+  // The conductor: maps smoothed camera stats to granular-voice parameters.
+  // Fixed seed -> reproducible drift/scene evolution.
+  const soundscape = createSoundscape({ seed: 0xC0FFEE });
 
-  let musicDrone = null;
-  let musicArp = null;
-  const music = {
-    start() {
-      // New seeds each play so the progression paths are fresh.
-      const seedA = randomSeed32();
-      const seedB = randomSeed32();
-
-      musicDrone?.stop();
-      musicArp?.stop();
-
-      musicDrone = createMusicEngine({
-        bpm: 120,
-        seed: seedA,
-        progression: DRONE_PROGRESSION,
-        initialState: "i",
-        arpeggiate: false,
-        barsPerChord: 4,
-        chordChangeProbability: 0.75,
-        retriggerOnHold: false,
-        onNote: (midiNote, params) => {
-          const chordSize = Number.isFinite(params?.chordSize) ? Math.max(1, Math.trunc(params.chordSize)) : 4;
-          noteOn({
-            note: midiNote,
-            amp: 0.33 / chordSize,
-            attack: 2.0,
-            release: 28.0,
-          });
-        },
-        getNoteParams: () => ({}),
-      });
-
-      musicArp = createMusicEngine({
-        bpm: 120,
-        seed: seedB,
-        arpeggiate: true,
-        onNote: (midiNote) => {
-          noteOn({
-            note: midiNote,
-            amp: 0.1,
-            attack: 0.02,
-            release: 1.4,
-          });
-        },
-        getNoteParams: () => ({}),
-      });
-
-      musicDrone.start();
-      musicArp.start();
-    },
-    stop() {
-      musicArp?.stop();
-      musicDrone?.stop();
-    },
-    get running() {
-      return Boolean(musicDrone?.running || musicArp?.running);
-    },
+  const iso01 = () => {
+    const v = Number(hud.getCameraSettings()?.iso);
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5;
   };
 
   const refreshAudioUi = () => {
     const ok = isAudioBooted();
     if (audioTestBtn) audioTestBtn.disabled = !ok;
     if (audioMusicBtn) audioMusicBtn.disabled = !ok;
-    if (audioMusicBtn) audioMusicBtn.textContent = music.running ? "Stop music" : "Start music";
-    setAudioStatus(ok ? (music.running ? "music" : "ready") : "off");
+    if (audioMusicBtn) audioMusicBtn.textContent = soundscape.running ? "Stop soundscape" : "Start soundscape";
+    setAudioStatus(ok ? (soundscape.running ? "soundscape" : "ready") : "off");
   };
 
   refreshAudioUi();
@@ -489,8 +434,8 @@ async function main() {
 
   audioMusicBtn?.addEventListener("click", () => {
     try {
-      if (music.running) music.stop();
-      else music.start();
+      if (soundscape.running) soundscape.stop();
+      else soundscape.start(statsSmooth, iso01());
       refreshAudioUi();
     } catch (e) {
       console.error(e);
@@ -543,13 +488,7 @@ async function main() {
   }
 
   let lastT = performance.now();
-  let lastReverbAt = 0;
   let lastAudioHudAt = 0;
-  let lastFilterAt = 0;
-  let lastCutoff = null;
-  let lastRes = null;
-  let lastReverbRoom = null;
-  let lastReverbMix = null;
   function render(tNow) {
     const dt = Math.min(0.05, (tNow - lastT) / 1000);
     lastT = tNow;
@@ -562,44 +501,20 @@ async function main() {
     sendCamera();
 
     updateSmoothedStats(dt);
+    // The conductor (soundscape.js) owns all audio-parameter updates: it throttles
+    // its own /n_set batches and drives the FX chain, so nothing is done here.
     if (isAudioBooted()) {
-      if (tNow - lastFilterAt > 50) {
-        const cutoff = mapMeanToCutoff(statsSmooth.mean);
-        const res = 0.45;
-        const cutoffChanged = lastCutoff === null || Math.abs(cutoff - lastCutoff) > 0.2;
-        const resChanged = lastRes === null || Math.abs(res - lastRes) > 0.01;
-        if (cutoffChanged || resChanged) {
-          lastFilterAt = tNow;
-          lastCutoff = cutoff;
-          lastRes = res;
-          setFilter({ cutoff, res });
-        }
-      }
-      if (tNow - lastReverbAt > 100) {
-        const camSettings = hud.getCameraSettings();
-        const room = mapMaxToReverbRoom(statsSmooth.max, camSettings.iso);
-        const mix = 0.2 + 0.35 * room;
-
-        const roomChanged = lastReverbRoom === null || Math.abs(room - lastReverbRoom) > 0.01;
-        const mixChanged = lastReverbMix === null || Math.abs(mix - lastReverbMix) > 0.01;
-        if (roomChanged || mixChanged) {
-          lastReverbAt = tNow;
-          lastReverbRoom = room;
-          lastReverbMix = mix;
-          setReverb({ room, mix });
-        }
-      }
+      soundscape.update(dt, tNow, statsSmooth, iso01());
     }
 
     if (tNow - lastAudioHudAt > 100) {
       lastAudioHudAt = tNow;
-      const cutoff = mapMeanToCutoff(statsSmooth.mean);
-      const camSettings = hud.getCameraSettings();
-      const room = mapMaxToReverbRoom(statsSmooth.max, camSettings.iso);
-      const mix = 0.2 + 0.35 * room;
+      const d = soundscape.getDebug();
       setAudioStats(
-        `mean ${statsSmooth.mean.toFixed(3)}  max ${statsSmooth.max.toFixed(3)}\n` +
-        `cutoff ${cutoff.toFixed(1)}  reverb room ${room.toFixed(3)}  mix ${mix.toFixed(3)}  amp ${0.14.toFixed(2)}`,
+        `mean ${statsSmooth.mean.toFixed(3)}  median ${statsSmooth.median.toFixed(3)}  ` +
+        `max ${statsSmooth.max.toFixed(3)}  min ${statsSmooth.min.toFixed(3)}  range ${statsSmooth.range.toFixed(3)}\n` +
+        `cutoff ${d.cutoff.toFixed(1)}  reverb room ${d.room.toFixed(3)}  mix ${d.mix.toFixed(3)}  ` +
+        `anchor ${d.anchor.toFixed(1)}Hz  scene ${d.scene}`,
       );
     }
 

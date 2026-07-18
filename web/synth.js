@@ -28,7 +28,35 @@ const LEVEL_SYNTHDEF = "sonic-pi-fx_level";
 const LPF_SYNTHDEF = "sonic-pi-fx_lpf";
 const REVERB_SYNTHDEF = "sonic-pi-fx_reverb";
 
+// Custom granular voices compiled from audio/synthdefs/*.scd (see audio/README.md).
+// Loaded from our own web/synthdefs/ directory rather than the Sonic Pi unpkg base;
+// loadSynthDef treats any string containing "/" as a URL and uses it verbatim.
+const LOCAL_SYNTHDEF_DIR = new URL("./synthdefs/", import.meta.url).href;
+const LOCAL_SYNTHDEFS = ["grain-cloud-buf", "grain-cloud-sin", "sub-drone"];
+
+// Granulation source pool from the already-configured Sonic Pi sample collection.
+// The `ambi_*` family is long, tonal, and granulates well. Buffer indices are
+// assigned locally; nothing else in this app allocates buffers.
+const SAMPLE_POOL = [
+  "ambi_choir.flac",
+  "ambi_drone.flac",
+  "ambi_glass_hum.flac",
+  "ambi_haunted_hum.flac",
+  "ambi_lunar_land.flac",
+];
+const BUF_POOL_BASE = 10;
+
 let fxReady = false;
+let booted = false;
+
+// { bufnum, name } for each loaded granulation source.
+const bufferPool = [];
+
+// Long-running granular voices: nodeId -> { synthdef, params }. Kept so the
+// `setup` (recovery) handler can rebuild them after an audio-context restart.
+const liveVoices = new Map();
+
+let onRecoveredCb = null;
 
 function ensureInstance() {
   if (supersonic) return supersonic;
@@ -57,13 +85,15 @@ function ensureInstance() {
     supersonic.send("/g_new", GROUP_FX, 1, GROUP_SYNTHS);
     await supersonic.sync();
 
-    // If synthdefs are already loaded (e.g. after recover), rebuild FX chain.
-    if (
-      supersonic.loadedSynthDefs?.has?.(LEVEL_SYNTHDEF) &&
-      supersonic.loadedSynthDefs?.has?.(LPF_SYNTHDEF) &&
-      supersonic.loadedSynthDefs?.has?.(REVERB_SYNTHDEF)
-    ) {
+    // On first boot the synthdefs/samples aren't loaded yet; bootAudio() does
+    // that. On recovery (context restart) `booted` is already true, so rebuild
+    // the whole live tree: FX chain, sample buffers, then the granular voices.
+    if (booted) {
       await ensureGlobalFxChain();
+      await loadBufferPool();
+      rebuildLiveVoices();
+      // Let the conductor re-apply its current parameter targets.
+      onRecoveredCb?.();
     }
   });
 
@@ -87,10 +117,16 @@ export async function bootAudio({
     const s = ensureInstance();
     await s.init();
     await s.loadSynthDefs(synthdefs);
+    await loadLocalSynthDefs();
     await s.sync();
 
     // Now that synthdefs are loaded, we can safely create the FX chain.
     await ensureGlobalFxChain();
+
+    // Load the granulation source buffers used by grain-cloud-buf voices.
+    await loadBufferPool();
+
+    booted = true;
     return s;
   })();
 
@@ -268,4 +304,96 @@ export function freeNode(nodeId) {
   if (!s.initialized) return;
   if (!Number.isFinite(nodeId)) return;
   s.send("/n_free", Math.trunc(nodeId));
+}
+
+// --- Granular voices ---------------------------------------------------------
+
+export async function loadLocalSynthDefs() {
+  const s = ensureInstance();
+  for (const name of LOCAL_SYNTHDEFS) {
+    await s.loadSynthDef(`${LOCAL_SYNTHDEF_DIR}${name}.scsyndef`);
+  }
+}
+
+export async function loadBufferPool() {
+  const s = ensureInstance();
+  if (!s.initialized) return [];
+
+  bufferPool.length = 0;
+  for (let i = 0; i < SAMPLE_POOL.length; i++) {
+    bufferPool.push({ bufnum: BUF_POOL_BASE + i, name: SAMPLE_POOL[i] });
+  }
+
+  await Promise.all(bufferPool.map((b) => s.loadSample(b.bufnum, b.name)));
+  await s.sync();
+  return getBufferPool();
+}
+
+export function getBufferPool() {
+  return bufferPool.map((b) => b.bufnum);
+}
+
+function flattenParams(params = {}) {
+  const flat = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (typeof k !== "string" || k.length === 0) continue;
+    if (!Number.isFinite(v)) continue;
+    flat.push(k, v);
+  }
+  return flat;
+}
+
+function spawnVoiceNode(synthdef, nodeId, params) {
+  const s = ensureInstance();
+  s.send("/s_new", synthdef, nodeId, 0, GROUP_SYNTHS, ...flattenParams(params));
+}
+
+function rebuildLiveVoices() {
+  for (const [nodeId, rec] of liveVoices) {
+    spawnVoiceNode(rec.synthdef, nodeId, rec.params);
+  }
+}
+
+// Create a long-running granular voice. Returns a small handle; grain
+// generation happens entirely inside scsynth, so the caller only nudges
+// control-rate params via `set()` a few times per second.
+export function createVoice(synthdefName, params = {}) {
+  const s = ensureInstance();
+  if (!s.initialized) throw new Error("audio not booted (call bootAudio() after a user gesture)");
+
+  const nodeId = nextNodeId;
+  nextNodeId = (nextNodeId + 1) | 0;
+
+  const merged = { gate: 1, out_bus: BUS_SYNTH, ...params };
+  spawnVoiceNode(synthdefName, nodeId, merged);
+  liveVoices.set(nodeId, { synthdef: synthdefName, params: { ...merged } });
+
+  return {
+    nodeId,
+    set(next = {}) {
+      const rec = liveVoices.get(nodeId);
+      if (rec) {
+        for (const [k, v] of Object.entries(next)) {
+          if (Number.isFinite(v)) rec.params[k] = v;
+        }
+      }
+      setNode(nodeId, next);
+    },
+    free({ release } = {}) {
+      liveVoices.delete(nodeId);
+      if (!s.initialized) return;
+      // gate 0 triggers the asr release; the synthdef's doneAction frees the node.
+      if (Number.isFinite(release)) {
+        s.send("/n_set", nodeId, "release", Math.max(0.01, Number(release)), "gate", 0);
+      } else {
+        s.send("/n_set", nodeId, "gate", 0);
+      }
+    },
+  };
+}
+
+// Register a callback fired after an audio-context recovery has rebuilt the FX
+// chain, buffers, and voices, so the conductor can re-apply its targets.
+export function onAudioRecovered(cb) {
+  onRecoveredCb = typeof cb === "function" ? cb : null;
 }
