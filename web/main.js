@@ -1,8 +1,8 @@
 import { FlyCamera, createMouseFlightController, mat4Invert, mat4Mul, mat4Perspective } from "./camera.js";
 import { createAoBlurProgram, createAoCompositeProgram, createAoProgram, createMeshProgram } from "./shaders.js";
 import { createHudController } from "./config.js";
-import { bootAudio, ensureGlobalReverb, isAudioBooted, noteOn, setFilter, setReverb } from "./synth.js";
-import { DRONE_PROGRESSION, createMusicEngine, mapMaxToReverbRoom, mapMeanToCutoff } from "./music.js";
+import { bootAudio, ensureGlobalReverb, isAudioBooted, noteOn } from "./synth.js";
+import { createSoundscape } from "./soundscape.js";
 import { MSG_TYPES } from "./msg_types.js";
 
 const canvas = document.querySelector("#c");
@@ -348,10 +348,11 @@ async function main() {
         return;
       }
 
-      // Future: camera neighbourhood scalar stats (normalized 0..1)
+      // Camera neighbourhood scalar stats (normalized 0..1).
       if (msg.type === MSG_TYPES.CAMERA_VOXEL_STATS) {
-        if (Number.isFinite(msg.mean)) statsTarget.mean = Math.max(0, Math.min(1, msg.mean));
-        if (Number.isFinite(msg.max)) statsTarget.max = Math.max(0, Math.min(1, msg.max));
+        for (const key of STAT_KEYS) {
+          if (Number.isFinite(msg[key])) statsTarget[key] = Math.max(0, Math.min(1, msg[key]));
+        }
         return;
       }
 
@@ -371,15 +372,17 @@ async function main() {
 
   // Smoothed camera-neighbourhood stats (normalized 0..1).
   // Must be initialized before `createHudController` triggers the first worker start.
-  const statsTarget = { mean: 0.5, max: 0.5 };
-  const statsSmooth = { mean: 0.5, max: 0.5 };
+  const STAT_KEYS = ["mean", "median", "max", "min", "range"];
+  const statsTarget = { mean: 0.5, median: 0.5, max: 0.5, min: 0, range: 0.25 };
+  const statsSmooth = { ...statsTarget };
   // Lower smoothing lag so voxel stats influence synth params faster.
   const SMOOTH_TAU_S = 0.25;
 
   const updateSmoothedStats = (dt) => {
     const a = 1 - Math.exp(-Math.max(0, dt) / SMOOTH_TAU_S);
-    statsSmooth.mean += (statsTarget.mean - statsSmooth.mean) * a;
-    statsSmooth.max += (statsTarget.max - statsSmooth.max) * a;
+    for (const key of STAT_KEYS) {
+      statsSmooth[key] += (statsTarget[key] - statsSmooth[key]) * a;
+    }
   };
 
   const hud = createHudController({
@@ -396,62 +399,23 @@ async function main() {
     return Math.floor(Math.random() * 2 ** 32) >>> 0;
   }
 
-  let musicDrone = null;
-  let musicArp = null;
+  // The granular soundscape conductor (replaces the old chord-based music engine).
+  // A new seed each start; a fixed seed here reproduces the same evolution.
+  let soundscape = null;
   const music = {
     start() {
-      // New seeds each play so the progression paths are fresh.
-      const seedA = randomSeed32();
-      const seedB = randomSeed32();
-
-      musicDrone?.stop();
-      musicArp?.stop();
-
-      musicDrone = createMusicEngine({
-        bpm: 120,
-        seed: seedA,
-        progression: DRONE_PROGRESSION,
-        initialState: "i",
-        arpeggiate: false,
-        barsPerChord: 4,
-        chordChangeProbability: 0.75,
-        retriggerOnHold: false,
-        onNote: (midiNote, params) => {
-          const chordSize = Number.isFinite(params?.chordSize) ? Math.max(1, Math.trunc(params.chordSize)) : 4;
-          noteOn({
-            note: midiNote,
-            amp: 0.33 / chordSize,
-            attack: 2.0,
-            release: 28.0,
-          });
-        },
-        getNoteParams: () => ({}),
+      soundscape?.stop();
+      soundscape = createSoundscape({
+        seed: randomSeed32(),
+        getIso: () => hud.getCameraSettings().iso,
       });
-
-      musicArp = createMusicEngine({
-        bpm: 120,
-        seed: seedB,
-        arpeggiate: true,
-        onNote: (midiNote) => {
-          noteOn({
-            note: midiNote,
-            amp: 0.1,
-            attack: 0.02,
-            release: 1.4,
-          });
-        },
-        getNoteParams: () => ({}),
-      });
-
-      musicDrone.start();
-      musicArp.start();
+      soundscape.start();
     },
     stop() {
-      musicArp?.stop();
-      musicDrone?.stop();
+      soundscape?.stop();
     },
     get running() {
-      return Boolean(musicDrone?.running || musicArp?.running);
+      return Boolean(soundscape?.running);
     },
   };
 
@@ -459,8 +423,8 @@ async function main() {
     const ok = isAudioBooted();
     if (audioTestBtn) audioTestBtn.disabled = !ok;
     if (audioMusicBtn) audioMusicBtn.disabled = !ok;
-    if (audioMusicBtn) audioMusicBtn.textContent = music.running ? "Stop music" : "Start music";
-    setAudioStatus(ok ? (music.running ? "music" : "ready") : "off");
+    if (audioMusicBtn) audioMusicBtn.textContent = music.running ? "Stop soundscape" : "Start soundscape";
+    setAudioStatus(ok ? (music.running ? "playing" : "ready") : "off");
   };
 
   refreshAudioUi();
@@ -543,13 +507,7 @@ async function main() {
   }
 
   let lastT = performance.now();
-  let lastReverbAt = 0;
   let lastAudioHudAt = 0;
-  let lastFilterAt = 0;
-  let lastCutoff = null;
-  let lastRes = null;
-  let lastReverbRoom = null;
-  let lastReverbMix = null;
   function render(tNow) {
     const dt = Math.min(0.05, (tNow - lastT) / 1000);
     lastT = tNow;
@@ -562,44 +520,19 @@ async function main() {
     sendCamera();
 
     updateSmoothedStats(dt);
-    if (isAudioBooted()) {
-      if (tNow - lastFilterAt > 50) {
-        const cutoff = mapMeanToCutoff(statsSmooth.mean);
-        const res = 0.45;
-        const cutoffChanged = lastCutoff === null || Math.abs(cutoff - lastCutoff) > 0.2;
-        const resChanged = lastRes === null || Math.abs(res - lastRes) > 0.01;
-        if (cutoffChanged || resChanged) {
-          lastFilterAt = tNow;
-          lastCutoff = cutoff;
-          lastRes = res;
-          setFilter({ cutoff, res });
-        }
-      }
-      if (tNow - lastReverbAt > 100) {
-        const camSettings = hud.getCameraSettings();
-        const room = mapMaxToReverbRoom(statsSmooth.max, camSettings.iso);
-        const mix = 0.2 + 0.35 * room;
-
-        const roomChanged = lastReverbRoom === null || Math.abs(room - lastReverbRoom) > 0.01;
-        const mixChanged = lastReverbMix === null || Math.abs(mix - lastReverbMix) > 0.01;
-        if (roomChanged || mixChanged) {
-          lastReverbAt = tNow;
-          lastReverbRoom = room;
-          lastReverbMix = mix;
-          setReverb({ room, mix });
-        }
-      }
-    }
+    // The conductor throttles its own /n_set batches internally.
+    soundscape?.update(dt, statsSmooth);
 
     if (tNow - lastAudioHudAt > 100) {
       lastAudioHudAt = tNow;
-      const cutoff = mapMeanToCutoff(statsSmooth.mean);
-      const camSettings = hud.getCameraSettings();
-      const room = mapMaxToReverbRoom(statsSmooth.max, camSettings.iso);
-      const mix = 0.2 + 0.35 * room;
+      const scape = soundscape?.getState();
+      const fxLine = scape?.fx
+        ? `cutoff ${scape.fx.cutoff.toFixed(1)}  room ${scape.fx.room.toFixed(3)}  mix ${scape.fx.mix.toFixed(3)}  ` +
+          `anchor ${scape.anchorHz.toFixed(1)}Hz  scene ${scape.sceneCount} (next ${scape.nextSceneInS.toFixed(0)}s)`
+        : "";
       setAudioStats(
-        `mean ${statsSmooth.mean.toFixed(3)}  max ${statsSmooth.max.toFixed(3)}\n` +
-        `cutoff ${cutoff.toFixed(1)}  reverb room ${room.toFixed(3)}  mix ${mix.toFixed(3)}  amp ${0.14.toFixed(2)}`,
+        `mean ${statsSmooth.mean.toFixed(3)}  med ${statsSmooth.median.toFixed(3)}  max ${statsSmooth.max.toFixed(3)}  ` +
+        `min ${statsSmooth.min.toFixed(3)}  rng ${statsSmooth.range.toFixed(3)}\n${fxLine}`,
       );
     }
 

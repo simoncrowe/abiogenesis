@@ -28,7 +28,31 @@ const LEVEL_SYNTHDEF = "sonic-pi-fx_level";
 const LPF_SYNTHDEF = "sonic-pi-fx_lpf";
 const REVERB_SYNTHDEF = "sonic-pi-fx_reverb";
 
+// Custom granular SynthDefs compiled from audio/synthdefs/ (see audio/README.md).
+// Paths contain "/" so Supersonic fetches them as-is instead of using synthdefBaseURL.
+const LOCAL_SYNTHDEF_BASE = "./synthdefs/";
+export const LOCAL_SYNTHDEFS = Object.freeze([
+  "grain-cloud-buf",
+  "grain-cloud-sin",
+  "sub-drone",
+]);
+
+// Granulation source pool: long tonal ambi_* samples from the Sonic Pi collection.
+const BUFFER_POOL = Object.freeze([
+  Object.freeze({ bufnum: 10, sample: "ambi_choir.flac" }),
+  Object.freeze({ bufnum: 11, sample: "ambi_drone.flac" }),
+  Object.freeze({ bufnum: 12, sample: "ambi_glass_hum.flac" }),
+  Object.freeze({ bufnum: 13, sample: "ambi_haunted_hum.flac" }),
+  Object.freeze({ bufnum: 14, sample: "ambi_piano.flac" }),
+]);
+
 let fxReady = false;
+let bootCompleted = false;
+
+// nodeId -> { synthdef, params } for every live long-running voice, so the
+// setup/recover handler can rebuild them and the conductor can re-apply targets.
+const liveVoices = new Map();
+const recoveryListeners = new Set();
 
 function ensureInstance() {
   if (supersonic) return supersonic;
@@ -65,6 +89,25 @@ function ensureInstance() {
     ) {
       await ensureGlobalFxChain();
     }
+
+    // After a recover (not the initial boot), reload local assets and rebuild
+    // live voices, then let listeners (the conductor) re-apply their targets.
+    if (bootCompleted) {
+      try {
+        await loadLocalSynthDefs();
+        await loadBufferPool();
+        rebuildLiveVoices();
+        for (const cb of recoveryListeners) {
+          try {
+            cb();
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      } catch (e) {
+        console.error("audio recovery failed", e);
+      }
+    }
   });
 
   return supersonic;
@@ -87,10 +130,13 @@ export async function bootAudio({
     const s = ensureInstance();
     await s.init();
     await s.loadSynthDefs(synthdefs);
+    await loadLocalSynthDefs();
+    await loadBufferPool();
     await s.sync();
 
     // Now that synthdefs are loaded, we can safely create the FX chain.
     await ensureGlobalFxChain();
+    bootCompleted = true;
     return s;
   })();
 
@@ -100,6 +146,90 @@ export async function bootAudio({
     bootPromise = null;
     throw e;
   }
+}
+
+async function loadLocalSynthDefs() {
+  const s = ensureInstance();
+  await Promise.all(
+    LOCAL_SYNTHDEFS.map((name) => s.loadSynthDef(`${LOCAL_SYNTHDEF_BASE}${name}.scsyndef`)),
+  );
+}
+
+async function loadBufferPool() {
+  const s = ensureInstance();
+  // Sequential on purpose: parallel loads can outrun buffer-pool growth and
+  // fail with "Buffer pool allocation failed".
+  for (const { bufnum, sample } of BUFFER_POOL) {
+    await s.loadSample(bufnum, sample);
+  }
+}
+
+export function getBufferPool() {
+  return BUFFER_POOL.map(({ bufnum, sample }) => ({ bufnum, sample }));
+}
+
+// Subscribe to engine recovery; the callback fires after voices are rebuilt so
+// the conductor can re-apply its current parameter targets.
+export function onAudioRecovered(cb) {
+  if (typeof cb !== "function") return () => {};
+  recoveryListeners.add(cb);
+  return () => recoveryListeners.delete(cb);
+}
+
+function sanitizeParams(params = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (typeof k !== "string" || k.length === 0) continue;
+    if (!Number.isFinite(v)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function rebuildLiveVoices() {
+  const s = ensureInstance();
+  for (const [nodeId, { synthdef, params }] of liveVoices) {
+    const flat = [];
+    for (const [k, v] of Object.entries(params)) flat.push(k, v);
+    s.send("/s_new", synthdef, nodeId, 0, GROUP_SYNTHS, ...flat);
+  }
+}
+
+// Long-running voice with control-rate parameter updates. Freeing releases the
+// ASR envelope (gate=0); the SynthDef's doneAction then frees the server node.
+export function createVoice(synthdef, params = {}) {
+  const s = ensureInstance();
+  if (!s.initialized) throw new Error("audio not booted (call bootAudio() after a user gesture)");
+
+  const nodeId = nextNodeId;
+  nextNodeId = (nextNodeId + 1) | 0;
+
+  const record = {
+    synthdef,
+    params: { out_bus: BUS_SYNTH, ...sanitizeParams(params) },
+  };
+
+  const flat = [];
+  for (const [k, v] of Object.entries(record.params)) flat.push(k, v);
+  s.send("/s_new", synthdef, nodeId, 0, GROUP_SYNTHS, ...flat);
+  liveVoices.set(nodeId, record);
+
+  return {
+    nodeId,
+    set(next = {}) {
+      if (!liveVoices.has(nodeId)) return;
+      Object.assign(record.params, sanitizeParams(next));
+      setNode(nodeId, next);
+    },
+    free({ release } = {}) {
+      if (!liveVoices.has(nodeId)) return;
+      liveVoices.delete(nodeId);
+      const p = {};
+      if (Number.isFinite(release)) p.release = Math.max(0.01, Number(release));
+      p.gate = 0;
+      setNode(nodeId, p);
+    },
+  };
 }
 
 export function noteOn({

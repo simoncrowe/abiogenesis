@@ -85,6 +85,7 @@ let lastVoxelStatsAt = 0;
 const VOXEL_STATS_INTERVAL_MS = WORKER_TUNING.voxelStatsIntervalMs;
 const VOXEL_STATS_SIDE = WORKER_TUNING.voxelStatsSide;
 const VOXEL_STATS_HALF = Math.floor(VOXEL_STATS_SIDE / 2);
+const voxelStatsScratch = new Float32Array(VOXEL_STATS_SIDE ** 3);
 
 function clampInt(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v | 0));
@@ -136,6 +137,7 @@ function maybePublishCameraVoxelStats() {
   let sum = 0;
   let min = Infinity;
   let max = -Infinity;
+  const samples = voxelStatsScratch;
 
   for (let z = z0; z <= z1; z++) {
     const zBase = dims * dims * z;
@@ -143,6 +145,7 @@ function maybePublishCameraVoxelStats() {
       const base = zBase + dims * y;
       for (let x = x0; x <= x1; x++) {
         const s = clamp01(v[base + x]);
+        samples[n] = s;
         n++;
         sum += s;
         if (s < min) min = s;
@@ -153,6 +156,11 @@ function maybePublishCameraVoxelStats() {
 
   if (n <= 0) return;
 
+  const sorted = samples.subarray(0, n).sort();
+  const median = n % 2 === 1
+    ? sorted[(n - 1) >> 1]
+    : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+
   const mean = sum / n;
   self.postMessage({
     type: MSG_TYPES.CAMERA_VOXEL_STATS,
@@ -160,6 +168,7 @@ function maybePublishCameraVoxelStats() {
     center: [cx, cy, cz],
     side: VOXEL_STATS_SIDE,
     mean,
+    median,
     min,
     max,
     range: max - min,
